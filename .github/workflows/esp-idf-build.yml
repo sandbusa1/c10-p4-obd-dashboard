@@ -13,7 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract uploaded project
+      - name: Extract uploaded new-UI project
         shell: bash
         run: |
           rm -rf work
@@ -21,7 +21,7 @@ jobs:
           unzip -q C10_P4_7IN_FULL_FUNCTIONAL_V2_WORKING_UI_CORE_FIX.zip -d work
           test -f work/C10_P4_DASH_FULL/main/dashboard_ui.c
 
-      - name: Apply LVGL live-page repair
+      - name: Keep new UI and repair live-page writes
         shell: bash
         run: |
           python3 - <<'PY'
@@ -59,7 +59,11 @@ jobs:
               if (p2 < 16 && ui_pid_valid(d,0x0D)) {
                   text_if(p2_title[p2], "MPH"); snprintf(v,sizeof(v),"%.0f",d->mph); text_if(p2_value[p2++],v);
               }
-              while (p2 < 16) { text_if(p2_title[p2], "NO MORE PIDS"); text_if(p2_value[p2], "N/A"); p2++; }
+              while (p2 < 16) {
+                  text_if(p2_title[p2], "NO MORE PIDS");
+                  text_if(p2_value[p2], "N/A");
+                  p2++;
+              }
               if (l2_page_title) {
                   if (banks > 1) snprintf(v,sizeof(v),"DATA %d/%d  |  %d LIVE",bank+1,banks,supported_metrics+(ui_pid_valid(d,0x0C)?1:0)+(ui_pid_valid(d,0x0D)?1:0));
                   else snprintf(v,sizeof(v),"DATA  |  %d LIVE",supported_metrics+(ui_pid_valid(d,0x0C)?1:0)+(ui_pid_valid(d,0x0D)?1:0));
@@ -70,58 +74,59 @@ jobs:
           p.write_text(s[:start]+new+s[end:])
           PY
 
-      - name: Apply ESP32-P4 LVGL runtime repair
+      - name: Apply proven working V3K watchdog architecture
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
-          p = Path('work/C10_P4_DASH_FULL/main/dashboard_ui.c')
-          s = p.read_text()
+          p=Path('work/C10_P4_DASH_FULL/main/dashboard_ui.c')
+          s=p.read_text()
 
-          # GCC compile cleanup.
-          s = re.sub(r';[ \t]+(?=if\s*\()', ';\n    ', s)
-
-          # LVGL 9.x timer objects are opaque.
-          s = re.sub(
-              r'lv_timer_create\(([^;]+?)\)->repeat_count\s*=\s*([^;]+);',
-              r'lv_timer_set_repeat_count(lv_timer_create(\1), \2);', s)
-          s = re.sub(
-              r'\b([A-Za-z_]\w*)->repeat_count\s*=\s*([^;]+);',
-              r'lv_timer_set_repeat_count(\1, \2);', s)
+          # Compile compatibility for LVGL 9.5.
+          s=re.sub(r';[ \t]+(?=if\s*\()', ';\n    ', s)
+          s=re.sub(r'lv_timer_create\(([^;]+?)\)->repeat_count\s*=\s*([^;]+);',
+                   r'lv_timer_set_repeat_count(lv_timer_create(\1), \2);', s)
+          s=re.sub(r'\b([A-Za-z_]\w*)->repeat_count\s*=\s*([^;]+);',
+                   r'lv_timer_set_repeat_count(\1, \2);', s)
           if '->repeat_count' in s:
-              raise SystemExit('Unrepaired LVGL repeat_count field access remains')
+              raise SystemExit('Unrepaired LVGL repeat_count access remains')
 
-          # Runtime architecture: Espressif requires every LVGL access from a
-          # non-adapter task to be protected by the adapter/BSP lock.  Do not
-          # spin on a short timeout: wait for the LVGL owner, update, unlock,
-          # then yield so CPU1 IDLE can run and feed TWDT.
-          ui_start = s.index('static void ui_task(void *arg)')
-          ui_end = s.find('\n}', ui_start)
-          if ui_end < 0:
-              raise SystemExit('ui_task end not found')
-          ui_end += 2
-          old_ui = s[ui_start:ui_end]
-          new_ui = re.sub(r'bsp_display_lock\(\s*100\s*\)', 'bsp_display_lock(0)', old_ui)
-          new_ui = re.sub(r'vTaskDelay\(pdMS_TO_TICKS\(40\)\);', 'vTaskDelay(pdMS_TO_TICKS(50));', new_ui)
-          s = s[:ui_start] + new_ui + s[ui_end:]
+          # Match the physical-board-proven V3K runtime exactly where it matters:
+          # dash_ui uses a bounded 100 ms BSP/LVGL lock and yields every 40 ms.
+          u=s.index('static void ui_task(void *arg)')
+          ue=s.find('\n}',u)
+          if ue < 0: raise SystemExit('ui_task end not found')
+          ue += 2
+          block=s[u:ue]
+          block=re.sub(r'bsp_display_lock\(\s*[^)]*\)', 'bsp_display_lock(100)', block)
+          block=re.sub(r'vTaskDelay\(pdMS_TO_TICKS\(\s*\d+\s*\)\);',
+                       'vTaskDelay(pdMS_TO_TICKS(40));', block)
+          # Application tasks must not drive LVGL's timer handler; adapter owns it.
+          block=re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', block)
+          s=s[:u]+block+s[ue:]
 
-          # Builder task gets the same single-owner rule: block for the lock,
-          # build all LVGL objects, release immediately.  Never call LVGL
-          # timer handler manually; esp_lvgl_adapter already owns it.
-          b = s.find('static void ui_builder_task(void *arg)')
+          # New graphics are still built by the new UI builder, but make its LVGL
+          # ownership identical to the known-good startup: wait indefinitely for
+          # the BSP display lock, build, unlock. No manual timer handler.
+          b=s.find('static void ui_builder_task(void *arg)')
           if b >= 0:
-              e = s.find('\n}', b)
-              if e < 0:
-                  raise SystemExit('ui_builder_task end not found')
-              e += 2
-              block = s[b:e]
-              block = re.sub(r'bsp_display_lock\(\s*[^)]*\)', 'bsp_display_lock(0)', block)
-              block = re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', block)
-              s = s[:b] + block + s[e:]
+              be=s.find('\n}',b)
+              if be < 0: raise SystemExit('ui_builder_task end not found')
+              be += 2
+              bb=s[b:be]
+              bb=re.sub(r'bsp_display_lock\(\s*[^)]*\)', 'bsp_display_lock(-1)', bb)
+              bb=re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', bb)
+              s=s[:b]+bb+s[be:]
+
+          # Safety audit: no app-side lv_timer_handler and no zero-time LVGL lock.
+          if re.search(r'\blv_timer_handler\s*\(', s):
+              raise SystemExit('Manual lv_timer_handler remains in dashboard_ui.c')
+          if 'bsp_display_lock(0)' in s:
+              raise SystemExit('Zero-time BSP display lock remains')
 
           p.write_text(s)
-          print('Applied P4 LVGL single-lock/yield runtime repair')
+          print('New UI retained; V3K-proven 100ms/40ms runtime and blocking builder lock applied')
           PY
 
       - name: Build ESP32-P4 firmware
@@ -146,6 +151,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: c10-p4-obd-firmware
+          name: c10-p4-obd-new-ui-v3k-runtime
           path: firmware/
           if-no-files-found: error
