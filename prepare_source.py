@@ -87,8 +87,34 @@ if b >= 0:
     bb = re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', bb)
     s = s[:b] + bb + s[be:]
 
+# Hardware log from commit 48499c3 proved startup starves IDLE0 while main builds
+# Page 3 (build_page3 -> lv_label_set_text). Keep the exact UI, but do not hold
+# the display lock continuously while constructing all five pages. Release/yield/
+# reacquire between page builders so the LVGL task and IDLE0 can run.
+ds = s.index('void dashboard_ui_start(void)')
+de = s.find('\n}', ds)
+if de < 0: raise SystemExit('dashboard_ui_start end not found')
+de += 2
+db = s[ds:de]
+page_calls = re.findall(r'(?m)^(\s*)build_page([1-5])\(\);\s*$', db)
+if len(page_calls) < 3:
+    raise SystemExit(f'Expected page builders in dashboard_ui_start, found {len(page_calls)}')
+
+def split_page(m):
+    indent, num = m.group(1), m.group(2)
+    return (f'{indent}build_page{num}();\n'
+            f'{indent}bsp_display_unlock();\n'
+            f'{indent}vTaskDelay(pdMS_TO_TICKS(1));\n'
+            f'{indent}if (!bsp_display_lock(-1)) {{\n'
+            f'{indent}    ESP_LOGE(TAG, "Failed to reacquire display lock after Page {num}");\n'
+            f'{indent}    return;\n'
+            f'{indent}}}')
+
+db = re.sub(r'(?m)^(\s*)build_page([1-5])\(\);\s*$', split_page, db)
+s = s[:ds] + db + s[de:]
+
 if '->repeat_count' in s: raise SystemExit('Unrepaired repeat_count access remains')
 if re.search(r'\blv_timer_handler\s*\(', s): raise SystemExit('Manual lv_timer_handler remains')
 if 'bsp_display_lock(0)' in s: raise SystemExit('Zero-time display lock remains')
 p.write_text(s)
-print('Prepared firmware/ from Build #24 green source and runtime patch.')
+print('Prepared firmware: green compile fixes + runtime lock fixes + startup page-build watchdog yield fix.')
