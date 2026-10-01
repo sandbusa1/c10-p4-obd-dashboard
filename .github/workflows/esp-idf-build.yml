@@ -70,6 +70,31 @@ jobs:
           p.write_text(s[:start]+new+s[end:])
           PY
 
+      - name: Fix LVGL 9.5 compile blockers
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('work/C10_P4_DASH_FULL/main/dashboard_ui.c')
+          s = p.read_text()
+
+          # GCC -Werror=misleading-indentation: split adjacent one-line if statements.
+          s = re.sub(r';[ \t]+(?=if\s*\()', ';\n    ', s)
+
+          # LVGL 9.x keeps lv_timer_t opaque; use its public setter instead.
+          s, n = re.subn(
+              r'\b([A-Za-z_]\w*)->repeat_count\s*=\s*([^;]+);',
+              r'lv_timer_set_repeat_count(\1, \2);',
+              s
+          )
+          if n == 0:
+              raise SystemExit('Expected lv_timer_t repeat_count assignment was not found')
+
+          p.write_text(s)
+          print(f'Converted {n} repeat_count assignment(s) to lv_timer_set_repeat_count()')
+          PY
+
       - name: Build ESP32-P4 firmware
         shell: bash
         working-directory: work/C10_P4_DASH_FULL
