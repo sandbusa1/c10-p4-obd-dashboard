@@ -79,17 +79,23 @@ jobs:
           p = Path('work/C10_P4_DASH_FULL/main/dashboard_ui.c')
           s = p.read_text()
 
-          # GCC -Werror=misleading-indentation: split adjacent one-line if statements.
           s = re.sub(r';[ \t]+(?=if\s*\()', ';\n    ', s)
 
-          # LVGL 9.x keeps lv_timer_t opaque. Convert only if an old direct field write exists.
-          s, n = re.subn(
+          # LVGL 9.x timer objects are opaque. Handle both variable and direct-create forms.
+          s = re.sub(
+              r'lv_timer_create\(([^;]+?)\)->repeat_count\s*=\s*([^;]+);',
+              r'lv_timer_set_repeat_count(lv_timer_create(\1), \2);',
+              s
+          )
+          s = re.sub(
               r'\b([A-Za-z_]\w*)->repeat_count\s*=\s*([^;]+);',
               r'lv_timer_set_repeat_count(\1, \2);',
               s
           )
+
+          if '->repeat_count' in s:
+              raise SystemExit('Unrepaired LVGL repeat_count field access remains')
           p.write_text(s)
-          print(f'LVGL repair complete; converted {n} legacy repeat_count assignment(s)')
           PY
 
       - name: Build ESP32-P4 firmware
