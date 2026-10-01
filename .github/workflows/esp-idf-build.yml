@@ -12,8 +12,104 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Extract uploaded project
+        shell: bash
+        run: |
+          rm -rf work
+          mkdir work
+          unzip -q C10_P4_7IN_FULL_FUNCTIONAL_V2_WORKING_UI_CORE_FIX.zip -d work
+          test -f work/C10_P4_DASH_FULL/main/dashboard_ui.c
+
+      - name: Apply LVGL live-page repair
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('work/C10_P4_DASH_FULL/main/dashboard_ui.c')
+          s=p.read_text()
+          start=s.index('static void update_dynamic_live_pages(const obd_data_t *d)')
+          end=s.index('\nstatic const char *dtc_description', start)
+          new=r'''static void update_dynamic_live_pages(const obd_data_t *d)
+          {
+              char v[64];
+              int supported_metrics = 0;
+              for (int i = 0; i < M_COUNT; ++i) {
+                  if (metric_available(d, metric_priority[i])) supported_metrics++;
+              }
+
+              /* Driver page has dedicated gauges. p1_title[] / p1_value[] are
+                 retired card-UI pointers and are intentionally NULL. Page 2
+                 owns the capability-driven live PID list. */
+              live_metric_t remaining[M_COUNT];
+              int rem_count = 0;
+              for (int i = 0; i < M_COUNT; ++i) {
+                  live_metric_t m = metric_priority[i];
+                  if (metric_available(d, m)) remaining[rem_count++] = m;
+              }
+
+              int banks = rem_count > 0 ? (rem_count + 15) / 16 : 1;
+              int bank = banks > 1 ? (int)((lv_tick_get() / 7000u) % (uint32_t)banks) : 0;
+              int first = bank * 16;
+              int p2 = 0;
+              for (; p2 < 16 && first + p2 < rem_count; ++p2) {
+                  live_metric_t m = remaining[first + p2];
+                  text_if(p2_title[p2], metric_title(m));
+                  metric_value(d, m, v, sizeof(v));
+                  text_if(p2_value[p2], v);
+              }
+              if (p2 < 16 && ui_pid_valid(d,0x0C)) {
+                  text_if(p2_title[p2], "RPM");
+                  snprintf(v,sizeof(v),"%d",d->rpm);
+                  text_if(p2_value[p2++],v);
+              }
+              if (p2 < 16 && ui_pid_valid(d,0x0D)) {
+                  text_if(p2_title[p2], "MPH");
+                  snprintf(v,sizeof(v),"%.0f",d->mph);
+                  text_if(p2_value[p2++],v);
+              }
+              while (p2 < 16) {
+                  text_if(p2_title[p2], "NO MORE PIDS");
+                  text_if(p2_value[p2], "N/A");
+                  p2++;
+              }
+
+              if (l2_page_title) {
+                  if (banks > 1)
+                      snprintf(v,sizeof(v),"DATA %d/%d  |  %d LIVE",bank+1,banks,
+                               supported_metrics+(ui_pid_valid(d,0x0C)?1:0)+(ui_pid_valid(d,0x0D)?1:0));
+                  else
+                      snprintf(v,sizeof(v),"DATA  |  %d LIVE",
+                               supported_metrics+(ui_pid_valid(d,0x0C)?1:0)+(ui_pid_valid(d,0x0D)?1:0));
+                  text_if(l2_page_title,v);
+              }
+          }
+          '''
+          p.write_text(s[:start]+new+s[end:])
+          PY
+          ! sed -n '/static void update_dynamic_live_pages/,/static const char \*dtc_description/p' work/C10_P4_DASH_FULL/main/dashboard_ui.c | grep -q 'lv_label_set_text('
+
       - name: Build ESP32-P4 firmware
         shell: bash
+        working-directory: work/C10_P4_DASH_FULL
         run: |
           idf.py set-target esp32p4
           idf.py build
+
+      - name: Collect firmware
+        if: success()
+        shell: bash
+        run: |
+          mkdir -p firmware
+          cp work/C10_P4_DASH_FULL/build/*.bin firmware/ || true
+          cp work/C10_P4_DASH_FULL/build/*.elf firmware/ || true
+          cp work/C10_P4_DASH_FULL/build/flash_args firmware/ || true
+          cp work/C10_P4_DASH_FULL/build/flasher_args.json firmware/ || true
+
+      - name: Upload firmware artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c10-p4-obd-firmware
+          path: firmware/
+          if-no-files-found: error
