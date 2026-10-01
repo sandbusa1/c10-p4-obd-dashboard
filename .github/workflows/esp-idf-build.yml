@@ -13,125 +13,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract uploaded new-UI project
+      - name: Prepare git-pull firmware source
         shell: bash
-        run: |
-          rm -rf work
-          mkdir work
-          unzip -q C10_P4_7IN_FULL_FUNCTIONAL_V2_WORKING_UI_CORE_FIX.zip -d work
-          test -f work/C10_P4_DASH_FULL/main/dashboard_ui.c
-
-      - name: Keep new UI and repair live-page writes
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('work/C10_P4_DASH_FULL/main/dashboard_ui.c')
-          s=p.read_text()
-          start=s.index('static void update_dynamic_live_pages(const obd_data_t *d)')
-          end=s.index('\nstatic const char *dtc_description', start)
-          new=r'''static void update_dynamic_live_pages(const obd_data_t *d)
-          {
-              char v[64];
-              int supported_metrics = 0;
-              for (int i = 0; i < M_COUNT; ++i) {
-                  if (metric_available(d, metric_priority[i])) supported_metrics++;
-              }
-              live_metric_t remaining[M_COUNT];
-              int rem_count = 0;
-              for (int i = 0; i < M_COUNT; ++i) {
-                  live_metric_t m = metric_priority[i];
-                  if (metric_available(d, m)) remaining[rem_count++] = m;
-              }
-              int banks = rem_count > 0 ? (rem_count + 15) / 16 : 1;
-              int bank = banks > 1 ? (int)((lv_tick_get() / 7000u) % (uint32_t)banks) : 0;
-              int first = bank * 16;
-              int p2 = 0;
-              for (; p2 < 16 && first + p2 < rem_count; ++p2) {
-                  live_metric_t m = remaining[first + p2];
-                  text_if(p2_title[p2], metric_title(m));
-                  metric_value(d, m, v, sizeof(v));
-                  text_if(p2_value[p2], v);
-              }
-              if (p2 < 16 && ui_pid_valid(d,0x0C)) {
-                  text_if(p2_title[p2], "RPM"); snprintf(v,sizeof(v),"%d",d->rpm); text_if(p2_value[p2++],v);
-              }
-              if (p2 < 16 && ui_pid_valid(d,0x0D)) {
-                  text_if(p2_title[p2], "MPH"); snprintf(v,sizeof(v),"%.0f",d->mph); text_if(p2_value[p2++],v);
-              }
-              while (p2 < 16) {
-                  text_if(p2_title[p2], "NO MORE PIDS");
-                  text_if(p2_value[p2], "N/A");
-                  p2++;
-              }
-              if (l2_page_title) {
-                  if (banks > 1) snprintf(v,sizeof(v),"DATA %d/%d  |  %d LIVE",bank+1,banks,supported_metrics+(ui_pid_valid(d,0x0C)?1:0)+(ui_pid_valid(d,0x0D)?1:0));
-                  else snprintf(v,sizeof(v),"DATA  |  %d LIVE",supported_metrics+(ui_pid_valid(d,0x0C)?1:0)+(ui_pid_valid(d,0x0D)?1:0));
-                  text_if(l2_page_title,v);
-              }
-          }
-          '''
-          p.write_text(s[:start]+new+s[end:])
-          PY
-
-      - name: Apply proven working V3K watchdog architecture
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          p=Path('work/C10_P4_DASH_FULL/main/dashboard_ui.c')
-          s=p.read_text()
-
-          # Compile compatibility for LVGL 9.5.
-          s=re.sub(r';[ \t]+(?=if\s*\()', ';\n    ', s)
-          s=re.sub(r'lv_timer_create\(([^;]+?)\)->repeat_count\s*=\s*([^;]+);',
-                   r'lv_timer_set_repeat_count(lv_timer_create(\1), \2);', s)
-          s=re.sub(r'\b([A-Za-z_]\w*)->repeat_count\s*=\s*([^;]+);',
-                   r'lv_timer_set_repeat_count(\1, \2);', s)
-          if '->repeat_count' in s:
-              raise SystemExit('Unrepaired LVGL repeat_count access remains')
-
-          # Match the physical-board-proven V3K runtime exactly where it matters:
-          # dash_ui uses a bounded 100 ms BSP/LVGL lock and yields every 40 ms.
-          u=s.index('static void ui_task(void *arg)')
-          ue=s.find('\n}',u)
-          if ue < 0: raise SystemExit('ui_task end not found')
-          ue += 2
-          block=s[u:ue]
-          block=re.sub(r'bsp_display_lock\(\s*[^)]*\)', 'bsp_display_lock(100)', block)
-          block=re.sub(r'vTaskDelay\(pdMS_TO_TICKS\(\s*\d+\s*\)\);',
-                       'vTaskDelay(pdMS_TO_TICKS(40));', block)
-          # Application tasks must not drive LVGL's timer handler; adapter owns it.
-          block=re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', block)
-          s=s[:u]+block+s[ue:]
-
-          # New graphics are still built by the new UI builder, but make its LVGL
-          # ownership identical to the known-good startup: wait indefinitely for
-          # the BSP display lock, build, unlock. No manual timer handler.
-          b=s.find('static void ui_builder_task(void *arg)')
-          if b >= 0:
-              be=s.find('\n}',b)
-              if be < 0: raise SystemExit('ui_builder_task end not found')
-              be += 2
-              bb=s[b:be]
-              bb=re.sub(r'bsp_display_lock\(\s*[^)]*\)', 'bsp_display_lock(-1)', bb)
-              bb=re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', bb)
-              s=s[:b]+bb+s[be:]
-
-          # Safety audit: no app-side lv_timer_handler and no zero-time LVGL lock.
-          if re.search(r'\blv_timer_handler\s*\(', s):
-              raise SystemExit('Manual lv_timer_handler remains in dashboard_ui.c')
-          if 'bsp_display_lock(0)' in s:
-              raise SystemExit('Zero-time BSP display lock remains')
-
-          p.write_text(s)
-          print('New UI retained; V3K-proven 100ms/40ms runtime and blocking builder lock applied')
-          PY
+        run: python3 prepare_source.py
 
       - name: Build ESP32-P4 firmware
         shell: bash
-        working-directory: work/C10_P4_DASH_FULL
+        working-directory: firmware
         run: |
           . /opt/esp/idf/export.sh
           python /opt/esp/idf/tools/idf.py set-target esp32p4
@@ -141,16 +29,16 @@ jobs:
         if: success()
         shell: bash
         run: |
-          mkdir -p firmware
-          cp work/C10_P4_DASH_FULL/build/*.bin firmware/ || true
-          cp work/C10_P4_DASH_FULL/build/*.elf firmware/ || true
-          cp work/C10_P4_DASH_FULL/build/flash_args firmware/ || true
-          cp work/C10_P4_DASH_FULL/build/flasher_args.json firmware/ || true
+          mkdir -p artifacts
+          cp firmware/build/*.bin artifacts/ || true
+          cp firmware/build/*.elf artifacts/ || true
+          cp firmware/build/flash_args artifacts/ || true
+          cp firmware/build/flasher_args.json artifacts/ || true
 
       - name: Upload firmware artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: c10-p4-obd-new-ui-v3k-runtime
-          path: firmware/
+          name: c10-p4-obd-gitpull-ready
+          path: artifacts/
           if-no-files-found: error
