@@ -70,7 +70,7 @@ jobs:
           p.write_text(s[:start]+new+s[end:])
           PY
 
-      - name: Fix LVGL 9.5 compile blockers
+      - name: Apply ESP32-P4 LVGL runtime repair
         shell: bash
         run: |
           python3 - <<'PY'
@@ -79,23 +79,49 @@ jobs:
           p = Path('work/C10_P4_DASH_FULL/main/dashboard_ui.c')
           s = p.read_text()
 
+          # GCC compile cleanup.
           s = re.sub(r';[ \t]+(?=if\s*\()', ';\n    ', s)
 
-          # LVGL 9.x timer objects are opaque. Handle both variable and direct-create forms.
+          # LVGL 9.x timer objects are opaque.
           s = re.sub(
               r'lv_timer_create\(([^;]+?)\)->repeat_count\s*=\s*([^;]+);',
-              r'lv_timer_set_repeat_count(lv_timer_create(\1), \2);',
-              s
-          )
+              r'lv_timer_set_repeat_count(lv_timer_create(\1), \2);', s)
           s = re.sub(
               r'\b([A-Za-z_]\w*)->repeat_count\s*=\s*([^;]+);',
-              r'lv_timer_set_repeat_count(\1, \2);',
-              s
-          )
-
+              r'lv_timer_set_repeat_count(\1, \2);', s)
           if '->repeat_count' in s:
               raise SystemExit('Unrepaired LVGL repeat_count field access remains')
+
+          # Runtime architecture: Espressif requires every LVGL access from a
+          # non-adapter task to be protected by the adapter/BSP lock.  Do not
+          # spin on a short timeout: wait for the LVGL owner, update, unlock,
+          # then yield so CPU1 IDLE can run and feed TWDT.
+          ui_start = s.index('static void ui_task(void *arg)')
+          ui_end = s.find('\n}', ui_start)
+          if ui_end < 0:
+              raise SystemExit('ui_task end not found')
+          ui_end += 2
+          old_ui = s[ui_start:ui_end]
+          new_ui = re.sub(r'bsp_display_lock\(\s*100\s*\)', 'bsp_display_lock(0)', old_ui)
+          new_ui = re.sub(r'vTaskDelay\(pdMS_TO_TICKS\(40\)\);', 'vTaskDelay(pdMS_TO_TICKS(50));', new_ui)
+          s = s[:ui_start] + new_ui + s[ui_end:]
+
+          # Builder task gets the same single-owner rule: block for the lock,
+          # build all LVGL objects, release immediately.  Never call LVGL
+          # timer handler manually; esp_lvgl_adapter already owns it.
+          b = s.find('static void ui_builder_task(void *arg)')
+          if b >= 0:
+              e = s.find('\n}', b)
+              if e < 0:
+                  raise SystemExit('ui_builder_task end not found')
+              e += 2
+              block = s[b:e]
+              block = re.sub(r'bsp_display_lock\(\s*[^)]*\)', 'bsp_display_lock(0)', block)
+              block = re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', block)
+              s = s[:b] + block + s[e:]
+
           p.write_text(s)
+          print('Applied P4 LVGL single-lock/yield runtime repair')
           PY
 
       - name: Build ESP32-P4 firmware
