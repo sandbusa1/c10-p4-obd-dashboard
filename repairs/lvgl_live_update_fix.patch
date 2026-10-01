@@ -1,0 +1,89 @@
+--- a/main/dashboard_ui.c
++++ b/main/dashboard_ui.c
+@@
+ static void text_if(lv_obj_t *o, const char *s)
+ {
+-    if (o && strcmp(lv_label_get_text(o), s)) lv_label_set_text(o, s);
++    if (!o || !s) return;
++    const char *cur = lv_label_get_text(o);
++    if (cur && !strcmp(cur, s)) return;
++    lv_label_set_text(o, s);
++    if (o == l3_dtcs) {
++        lv_obj_scroll_to_y(lv_obj_get_parent(o), 0, LV_ANIM_OFF);
++    }
+ }
+@@
+ static void update_dynamic_live_pages(const obd_data_t *d)
+ {
+-    bool used[M_COUNT] = {0};
+     char v[64];
+-    int p1 = 0;
+     int supported_metrics = 0;
+-    for (int i = 0; i < M_COUNT; ++i) if (metric_available(d, metric_priority[i])) supported_metrics++;
+-
+-    /* Page 1 keeps the eight highest-priority supported driving values. */
+-    for (int i=0; i<M_COUNT && p1<8; ++i) {
+-        live_metric_t m=metric_priority[i];
+-        if (!metric_available(d,m)) continue;
+-        lv_label_set_text(p1_title[p1], metric_title(m));
+-        metric_value(d,m,v,sizeof(v)); lv_label_set_text(p1_value[p1],v);
+-        used[m]=true; p1++;
+-    }
+-    while (p1<8) { lv_label_set_text(p1_title[p1], "UNSUPPORTED"); lv_label_set_text(p1_value[p1], "N/A"); p1++; }
++    for (int i = 0; i < M_COUNT; ++i) {
++        if (metric_available(d, metric_priority[i])) supported_metrics++;
++    }
+ 
+-    /* Page 2 auto-pages through every remaining decoded/supported metric.  This
+-       prevents a vehicle with >24 useful parameters from silently losing the
+-       lower-priority ones.  Each bank remains visible for 7 seconds. */
++    /* Driver page uses dedicated gauges. p1_title[] / p1_value[] are
++       intentionally NULL in build_page1(), so never write through them.
++       Page 2 owns the capability-driven live PID list. */
+     live_metric_t remaining[M_COUNT];
+     int rem_count = 0;
+-    for (int i=0; i<M_COUNT; ++i) {
+-        live_metric_t m=metric_priority[i];
+-        if (!used[m] && metric_available(d,m)) remaining[rem_count++] = m;
++    for (int i = 0; i < M_COUNT; ++i) {
++        live_metric_t m = metric_priority[i];
++        if (metric_available(d, m)) remaining[rem_count++] = m;
+     }
+@@
+     for (; p2 < 16 && first + p2 < rem_count; ++p2) {
+         live_metric_t m = remaining[first + p2];
+-        lv_label_set_text(p2_title[p2], metric_title(m));
+-        metric_value(d,m,v,sizeof(v)); lv_label_set_text(p2_value[p2],v);
++        text_if(p2_title[p2], metric_title(m));
++        metric_value(d, m, v, sizeof(v));
++        text_if(p2_value[p2], v);
++    }
++    if (p2 < 16 && ui_pid_valid(d, 0x0C)) {
++        text_if(p2_title[p2], "RPM");
++        snprintf(v, sizeof(v), "%d", d->rpm);
++        text_if(p2_value[p2++], v);
++    }
++    if (p2 < 16 && ui_pid_valid(d, 0x0D)) {
++        text_if(p2_title[p2], "MPH");
++        snprintf(v, sizeof(v), "%.0f", d->mph);
++        text_if(p2_value[p2++], v);
++    }
++    while (p2 < 16) {
++        text_if(p2_title[p2], "NO MORE PIDS");
++        text_if(p2_value[p2], "N/A");
++        p2++;
+     }
+-    if (p2<16 && ui_pid_valid(d,0x0C)) { lv_label_set_text(p2_title[p2],"RPM"); snprintf(v,sizeof(v),"%d",d->rpm); lv_label_set_text(p2_value[p2++],v); }
+-    if (p2<16 && ui_pid_valid(d,0x0D)) { lv_label_set_text(p2_title[p2],"MPH"); snprintf(v,sizeof(v),"%.0f",d->mph); lv_label_set_text(p2_value[p2++],v); }
+-    while (p2<16) { lv_label_set_text(p2_title[p2],"NO MORE PIDS"); lv_label_set_text(p2_value[p2],"N/A"); p2++; }
+ 
+     if (l2_page_title) {
+-        if (banks > 1) snprintf(v,sizeof(v),"DATA %d/%d  |  %d LIVE",bank+1,banks,supported_metrics+(ui_pid_valid(d,0x0C)?1:0)+(ui_pid_valid(d,0x0D)?1:0));
+-        else snprintf(v,sizeof(v),"DATA  |  %d LIVE",supported_metrics+(ui_pid_valid(d,0x0C)?1:0)+(ui_pid_valid(d,0x0D)?1:0));
+-        lv_label_set_text(l2_page_title,v);
++        int live = supported_metrics + (ui_pid_valid(d, 0x0C) ? 1 : 0) + (ui_pid_valid(d, 0x0D) ? 1 : 0);
++        if (banks > 1) snprintf(v, sizeof(v), "DATA %d/%d  |  %d LIVE", bank + 1, banks, live);
++        else snprintf(v, sizeof(v), "DATA  |  %d LIVE", live);
++        text_if(l2_page_title, v);
+     }
+ }
