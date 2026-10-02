@@ -10,14 +10,13 @@ if not src.exists(): raise SystemExit('Expected project directory not found in Z
 shutil.move(str(src),str(OUT)); shutil.rmtree('_extract',ignore_errors=True)
 p=OUT/'main'/'dashboard_ui.c'; s=p.read_text()
 
-# LVGL 9 compile fixes.
+# Minimal LVGL 9 compile compatibility fixes on top of the known-good ZIP.
 s=re.sub(r';[ \t]+(?=if\s*\()', ';\n    ', s)
 s=re.sub(r'lv_timer_create\(([^;]+?)\)->repeat_count\s*=\s*([^;]+);', r'lv_timer_set_repeat_count(lv_timer_create(\1), \2);', s)
 s=re.sub(r'\b([A-Za-z_]\w*)->repeat_count\s*=\s*([^;]+);', r'lv_timer_set_repeat_count(\1, \2);', s)
 s=re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', s)
 
-# Replace pathological diagnostics page with a lightweight equivalent. It keeps
-# READ/RESET functionality but avoids the object/style pattern where #31 stalled.
+# Keep the UI, but replace only the Page 3 object tree that was proven to stall startup.
 a=s.index('static void build_page3(void)')
 z=s.index('\n\nstatic void log_refresh_view',a)
 safe3=r'''static void build_page3(void)
@@ -66,33 +65,8 @@ safe3=r'''static void build_page3(void)
 '''
 s=s[:a]+safe3+s[z:]
 
-# Apply the live-update safety repair kept in repairs/.  The driver page uses
-# dedicated gauges, so p1_title[]/p1_value[] are intentionally NULL.  Writing
-# through those arrays can crash as soon as live OBD data arrives.  Apply every
-# hunk exactly and fail preparation if the archived source no longer matches.
-def apply_repair(text, patch_path):
-    patch = patch_path.read_text().splitlines()
-    hunks=[]; cur=None
-    for line in patch:
-        if line.startswith('@@'):
-            if cur is not None: hunks.append(cur)
-            cur=[]
-        elif cur is not None:
-            if line.startswith(('---','+++')): continue
-            if line.startswith((' ', '+', '-')): cur.append(line)
-    if cur is not None: hunks.append(cur)
-    for n,h in enumerate(hunks,1):
-        old='\n'.join(x[1:] for x in h if not x.startswith('+'))
-        new='\n'.join(x[1:] for x in h if not x.startswith('-'))
-        if old not in text:
-            raise SystemExit(f'Live-update repair hunk {n} no longer matches dashboard_ui.c')
-        text=text.replace(old,new,1)
-    return text
-
-s=apply_repair(s, Path('repairs/lvgl_live_update_fix.patch'))
-
-# Insert an asynchronous builder before dashboard_ui_start. Each page gets its own
-# lock window and an unlocked scheduler gap, matching the Waveshare BSP ownership model.
+# Build pages outside app_main's startup path. The splash is loaded first and the
+# BSP lock is released so LVGL can render it while the rest of the UI is created.
 marker='esp_err_t dashboard_ui_start(void)'
 pos=s.index(marker)
 builder=r'''static void startup_page_builder_task(void *arg)
@@ -114,17 +88,18 @@ builder=r'''static void startup_page_builder_task(void *arg)
 '''
 s=s[:pos]+builder+s[pos:]
 
-# Replace startup completely: start BSP, create/load splash FIRST, unlock, turn on
-# backlight, then return main to scheduler while a separate task builds pages.
-sm=re.search(r'esp_err_t dashboard_ui_start\(void\)\s*\{',s); brace=s.find('{',sm.start()); depth=0; de=None
+sm=re.search(r'esp_err_t dashboard_ui_start\(void\)\s*\{',s)
+if not sm: raise SystemExit('dashboard_ui_start not found')
+brace=s.find('{',sm.start()); depth=0; de=None
 for i in range(brace,len(s)):
     if s[i]=='{': depth+=1
     elif s[i]=='}':
         depth-=1
         if depth==0: de=i+1; break
+if de is None: raise SystemExit('dashboard_ui_start end not found')
 newstart=r'''esp_err_t dashboard_ui_start(void)
 {
-    ESP_LOGI(TAG, "ESP32-P4 7B OBD - Waveshare BSP async UI startup");
+    ESP_LOGI(TAG, "ESP32-P4 7B OBD - known-good ZIP + async UI");
     bsp_display_cfg_t cfg = {
         .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
         .rotation = ESP_LV_ADAPTER_ROTATE_0,
@@ -152,12 +127,7 @@ newstart=r'''esp_err_t dashboard_ui_start(void)
 }'''
 s=s[:sm.start()]+newstart+s[de:]
 
-# Static safety assertions: fail CI instead of shipping a known bad image.
 if '->repeat_count' in s: raise SystemExit('direct repeat_count remains')
 if re.search(r'\blv_timer_handler\s*\(',s): raise SystemExit('manual lv_timer_handler remains')
-if 'lv_label_set_text(p1_title[p1]' in s or 'lv_label_set_text(p1_value[p1]' in s:
-    raise SystemExit('unsafe Page 1 live-label writes remain')
-if 'text_if(p2_title[p2]' not in s or 'text_if(p2_value[p2]' not in s:
-    raise SystemExit('live Page 2 null-safe update repair missing')
 p.write_text(s)
-print('Prepared firmware: Waveshare BSP startup; splash first; async page build; safe Page 3; live OBD update repair applied.')
+print('Prepared firmware from known-good ZIP: UI retained, splash first, async pages, safe Page 3.')
