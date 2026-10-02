@@ -87,17 +87,14 @@ if b >= 0:
     bb = re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', bb)
     s = s[:b] + bb + s[be:]
 
-# Startup watchdog fix: find the real dashboard start function regardless of
-# return type/qualifiers, then release/yield/reacquire between heavy page builds.
-start_match = re.search(r'(?m)^\s*(?:static\s+)?(?:void|esp_err_t)\s+dashboard_ui_start\s*\(\s*void\s*\)\s*\{', s)
+start_match = re.search(r'(?m)^\s*(?:static\s+)?(void|esp_err_t)\s+dashboard_ui_start\s*\(\s*void\s*\)\s*\{', s)
 if not start_match:
-    # Some source versions take no explicit void token: dashboard_ui_start()
-    start_match = re.search(r'(?m)^\s*(?:static\s+)?(?:void|esp_err_t)\s+dashboard_ui_start\s*\(\s*\)\s*\{', s)
+    start_match = re.search(r'(?m)^\s*(?:static\s+)?(void|esp_err_t)\s+dashboard_ui_start\s*\(\s*\)\s*\{', s)
 if not start_match:
     raise SystemExit('dashboard_ui_start function not found')
+return_type = start_match.group(1)
+error_return = 'return ESP_FAIL;' if return_type == 'esp_err_t' else 'return;'
 ds = start_match.start()
-
-# Brace-match the whole function instead of assuming the first newline-brace is its end.
 brace = s.find('{', start_match.start(), start_match.end())
 depth = 0
 de = None
@@ -123,7 +120,7 @@ def split_page(m):
             f'{indent}vTaskDelay(pdMS_TO_TICKS(1));\n'
             f'{indent}if (!bsp_display_lock(-1)) {{\n'
             f'{indent}    ESP_LOGE(TAG, "Failed to reacquire display lock after Page {num}");\n'
-            f'{indent}    return;\n'
+            f'{indent}    {error_return}\n'
             f'{indent}}}')
 
 db = re.sub(r'(?m)^(\s*)build_page([1-5])\(\);\s*$', split_page, db)
@@ -133,4 +130,4 @@ if '->repeat_count' in s: raise SystemExit('Unrepaired repeat_count access remai
 if re.search(r'\blv_timer_handler\s*\(', s): raise SystemExit('Manual lv_timer_handler remains')
 if 'bsp_display_lock(0)' in s: raise SystemExit('Zero-time display lock remains')
 p.write_text(s)
-print('Prepared firmware: green compile fixes + runtime lock fixes + startup page-build watchdog yield fix.')
+print('Prepared firmware: compile fixes + runtime lock fixes + startup page-build watchdog yield fix.')
