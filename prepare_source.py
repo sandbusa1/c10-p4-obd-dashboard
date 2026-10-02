@@ -321,6 +321,45 @@ p.write_text(s)
 # Apply reference artwork, live arcs, bold fonts and one commanded-gear reading.
 import runpy
 runpy.run_path(str(Path(__file__).resolve().parent / "artwork" / "apply_reference.py"))
+# This installation exposes commanded gear only: assume Drive for display.
+obd_path = OUT / 'main' / 'obd_auto.c'
+obd = obd_path.read_text()
+a = obd.index('/* GM P01/P59 enhanced transmission data')
+b = obd.index('static bool wideband_pid_supported(void)', a)
+obd = obd[:a] + r'''/* Commanded gear only. No shifter-range or road-speed gate. */
+static int decode_22199a(const char *r)
+{
+    uint8_t b[128]; int n=hexbytes(r,b,sizeof(b));
+    for(int i=0;i+3<n;i++) if(b[i]==0x62&&b[i+1]==0x19&&b[i+2]==0x9A) {
+        uint8_t g=b[i+3]; if(g>=1&&g<=4) return g;
+    }
+    return 0;
+}
+
+static void query_gear(void)
+{
+    char r[512] = "";
+    bool replied = elm_cmd("22199A",r,sizeof(r),900);
+    int g = replied ? decode_22199a(r) : 0;
+    xSemaphoreTake(s_lock,portMAX_DELAY);
+    s_d.gear_valid = (g >= 1 && g <= 4);
+    s_d.gear = g;
+    s_d.seq++;
+    xSemaphoreGive(s_lock);
+    ESP_LOGI(TAG,"GEAR_COMMANDED_ONLY 22199A raw=%.120s decoded=%d",r,g);
+}
+
+''' + obd[b:]
+for old in ('        uint32_t range_poll = 0;\n',
+            '            if((range_poll++ % 20U)==0U) query_gm_shifter_range();\n'):
+    if obd.count(old) != 1: raise SystemExit('Gear range polling source changed')
+    obd = obd.replace(old, '', 1)
+obd = obd.replace('Range is slow because the lever rarely moves.',
+                  'Display assumes Drive; only commanded gear is requested.')
+obd_path.write_text(obd)
+p.write_text(p.read_text().replace('DRIVER_REFERENCE_V3 ROTATION=',
+                                  'DRIVER_REFERENCE_V3 GEAR_COMMANDED_ONLY ROTATION='))
+print('Verified gear: GEAR_COMMANDED_ONLY | assumed Drive | no range/speed gate')
 written = p.read_text()
 for marker in ('driver_background_rgb565_start', 'ESP_LV_ADAPTER_ROTATE_180', 'splash_loaded_us < 3000000'):
     if marker not in written: raise SystemExit(f'Prepared source missing {marker}: {p.resolve()}')
