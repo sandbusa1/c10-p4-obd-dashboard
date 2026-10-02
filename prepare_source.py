@@ -125,7 +125,7 @@ static void ui_build_checkpoint(void)
     int64_t now = esp_timer_get_time();
     if (now - s_builder_checkpoint_us < 10000) return;
     bsp_display_unlock();
-    vTaskDelay(1); /* One tick, even when pdMS_TO_TICKS(1) would be zero. */
+    vTaskDelay(pdMS_TO_TICKS(3) > 0 ? pdMS_TO_TICKS(3) : 1);
     if (!bsp_display_lock(-1)) {
         ESP_LOGE(TAG, "UI builder could not reacquire LVGL lock");
         s_builder_task = NULL;
@@ -156,6 +156,13 @@ builder=r'''static void startup_page_builder_task(void *arg)
     (void)arg;
     s_builder_task = xTaskGetCurrentTaskHandle();
     s_builder_checkpoint_us = esp_timer_get_time();
+    if (!bsp_display_lock(-1)) { vTaskDelete(NULL); return; }
+    s_ui_boot_us = esp_timer_get_time();
+    build_splash();
+    lv_screen_load(splash_screen);
+    bsp_display_unlock();
+    ESP_LOGI(TAG, "SPLASH LOADED - BUILDING UI BEFORE LIVE UPDATE TASK");
+    vTaskDelay(pdMS_TO_TICKS(3) > 0 ? pdMS_TO_TICKS(3) : 1);
     void (*builders[])(void) = { build_page1, build_page2, build_page3, build_page4 };
     for (int i = 0; i < 4; ++i) {
         ESP_LOGI(TAG, "ASYNC PAGE %d BUILD START: internal=%u PSRAM=%u", i + 1, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
@@ -203,17 +210,11 @@ newstart=r'''esp_err_t dashboard_ui_start(void)
     lv_display_t *disp = bsp_display_start_with_config(&cfg);
     if (!disp) return ESP_FAIL;
 
-    if (!bsp_display_lock(-1)) return ESP_FAIL;
-    s_ui_boot_us = esp_timer_get_time();
-    build_splash();
-    lv_screen_load(splash_screen);
-    bsp_display_unlock();
-
     bsp_display_backlight_on();
     bsp_display_brightness_set(s_brightness_pct);
-    ESP_LOGI(TAG, "SPLASH LOADED - BUILDING UI BEFORE LIVE UPDATE TASK");
+    ESP_LOGI(TAG, "ADAPTER READY - STARTING UI BUILDER");
 
-    if (xTaskCreatePinnedToCore(startup_page_builder_task, "ui_build", 8192, NULL, 5, NULL, 1) != pdPASS) return ESP_ERR_NO_MEM;
+    if (xTaskCreatePinnedToCore(startup_page_builder_task, "ui_build", 12288, NULL, 2, NULL, 1) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
 }'''
 s=s[:sm.start()]+newstart+s[de:]
