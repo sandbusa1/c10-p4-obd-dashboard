@@ -1,13 +1,17 @@
 from pathlib import Path
-import re, shutil, zipfile
+import re, shutil, zipfile, tempfile, time
 
 ZIP=Path('C10_P4_7IN_FULL_FUNCTIONAL_V2_WORKING_UI_CORE_FIX.zip'); OUT=Path('firmware'); INNER='C10_P4_DASH_FULL'
 if not ZIP.exists(): raise SystemExit(f'Missing {ZIP}')
-if OUT.exists(): shutil.rmtree(OUT)
-with zipfile.ZipFile(ZIP) as z: z.extractall('_extract')
-src=Path('_extract')/INNER
-if not src.exists(): raise SystemExit('Expected project directory not found in ZIP')
-shutil.move(str(src),str(OUT)); shutil.rmtree('_extract',ignore_errors=True)
+if OUT.exists():
+    backup = Path(f'firmware_previous_{time.time_ns()}')
+    OUT.rename(backup)
+    print(f'Preserved previous firmware: {backup.resolve()}')
+with tempfile.TemporaryDirectory(prefix='firmware_extract_', dir='.') as extraction:
+    with zipfile.ZipFile(ZIP) as z: z.extractall(extraction)
+    src=Path(extraction)/INNER
+    if not src.exists(): raise SystemExit('Expected project directory not found in ZIP')
+    shutil.move(str(src),str(OUT))
 p=OUT/'main'/'dashboard_ui.c'; s=p.read_text()
 
 # Minimal LVGL 9 compile compatibility fixes on top of the known-good ZIP.
@@ -314,8 +318,11 @@ s=s.replace('    /* Large live values centered', '''    /* Inner faces cover the
     /* Large live values centered''')
 s=s.replace('ESP32-P4 7B OBD - race-free async UI', 'ESP32-P4 7B OBD - DRIVER_ART_V2 ROTATION=180 SPLASH=3S')
 p.write_text(s)
+# Apply reference artwork, live arcs, bold fonts and one commanded-gear reading.
+import runpy
+runpy.run_path(str(Path(__file__).resolve().parent / "artwork" / "apply_reference.py"))
 written = p.read_text()
 for marker in ('driver_background_rgb565_start', 'ESP_LV_ADAPTER_ROTATE_180', 'splash_loaded_us < 3000000'):
     if marker not in written: raise SystemExit(f'Prepared source missing {marker}: {p.resolve()}')
-print(f'Verified source: {p.resolve()} | DRIVER_ART_V2 | ROTATION=180 | SPLASH=3S')
+print(f'Verified source: {p.resolve()} | DRIVER_REFERENCE_V3 | ROTATION=180 | SPLASH=3S')
 print('Prepared firmware: PSRAM-backed LVGL allocator + safe live updates + yielding async startup.')
