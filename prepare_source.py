@@ -221,5 +221,21 @@ s=s[:sm.start()]+newstart+s[de:]
 if 'lv_label_set_text(p1_title[p1]' in s or 'lv_label_set_text(p1_value[p1]' in s: raise SystemExit('unsafe driver label writes remain')
 if '->repeat_count' in s: raise SystemExit('direct repeat_count remains')
 if re.search(r'\blv_timer_handler\s*\(',s): raise SystemExit('manual lv_timer_handler remains')
+# The full UI must not use LVGL's default fixed 64 KiB pool. Use the IDF
+# malloc heap, which can allocate widget/style memory from installed PSRAM.
+config = OUT / 'sdkconfig.defaults'
+config_text = config.read_text()
+settings = {
+    'CONFIG_LV_USE_BUILTIN_MALLOC': 'n',
+    'CONFIG_LV_USE_CLIB_MALLOC': 'y',
+    'CONFIG_SPIRAM_USE_MALLOC': 'y',
+    'CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE': 'y',
+    'CONFIG_ESP_SYSTEM_USE_FRAME_POINTER': 'y',
+}
+for key, value in settings.items():
+    config_text = re.sub(r'^' + key + r'=.*\n?', '', config_text, flags=re.M)
+    config_text = re.sub(r'^# ' + key + r' is not set\n?', '', config_text, flags=re.M)
+    config_text += f'\n{key}={value}\n'
+config.write_text(config_text)
 p.write_text(s)
-print('Prepared firmware: known-good Page 3 + race-free splash/build/live-update sequencing.')
+print('Prepared firmware: PSRAM-backed LVGL allocator + safe live updates + yielding async startup.')
