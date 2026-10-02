@@ -92,6 +92,60 @@ good3=r'''static void build_page3(void)
 '''
 s=s[:a]+good3+s[z:]
 
+def apply_repair(text, patch_path):
+    patch = patch_path.read_text().splitlines()
+    hunks=[]; cur=None
+    for line in patch:
+        if line.startswith('@@'):
+            if cur is not None: hunks.append(cur)
+            cur=[]
+        elif cur is not None:
+            if line.startswith(('---','+++')): continue
+            if line.startswith((' ', '+', '-')): cur.append(line)
+    if cur is not None: hunks.append(cur)
+    for n,h in enumerate(hunks,1):
+        old='\n'.join(x[1:] for x in h if not x.startswith('+'))
+        new='\n'.join(x[1:] for x in h if not x.startswith('-'))
+        if old not in text:
+            raise SystemExit(f'Live-update repair hunk {n} no longer matches dashboard_ui.c')
+        text=text.replace(old,new,1)
+    return text
+
+s=s.replace("    /* RPM/speed are always visible on Page 1; use spare Page 2 cells for them\n       only when the vehicle has fewer than sixteen remaining metrics. */\n", "")
+s=apply_repair(s, Path('repairs/lvgl_live_update_fix.patch'))
+
+# Checkpoint before widget allocation, only from the startup builder task.
+# Pages remain off-screen until complete; unlock lets the adapter render splash.
+s=s.replace('#include "esp_timer.h"', '#include "esp_timer.h"\n#include "esp_heap_caps.h"')
+helper=r'''static TaskHandle_t s_builder_task;
+static int64_t s_builder_checkpoint_us;
+static void ui_build_checkpoint(void)
+{
+    if (xTaskGetCurrentTaskHandle() != s_builder_task) return;
+    int64_t now = esp_timer_get_time();
+    if (now - s_builder_checkpoint_us < 10000) return;
+    bsp_display_unlock();
+    vTaskDelay(1); /* One tick, even when pdMS_TO_TICKS(1) would be zero. */
+    if (!bsp_display_lock(-1)) {
+        ESP_LOGE(TAG, "UI builder could not reacquire LVGL lock");
+        s_builder_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    s_builder_checkpoint_us = esp_timer_get_time();
+}
+
+/* Self-referencing macros expand the original LVGL function exactly once. */
+#define lv_obj_create(p) (ui_build_checkpoint(), lv_obj_create(p))
+#define lv_arc_create(p) (ui_build_checkpoint(), lv_arc_create(p))
+#define lv_label_create(p) (ui_build_checkpoint(), lv_label_create(p))
+#define lv_line_create(p) (ui_build_checkpoint(), lv_line_create(p))
+#define lv_button_create(p) (ui_build_checkpoint(), lv_button_create(p))
+#define lv_image_create(p) (ui_build_checkpoint(), lv_image_create(p))
+
+'''
+s=s.replace('/* ---- palette ---- */', helper + '/* ---- palette ---- */', 1)
+
 # Build pages behind the visible splash. IMPORTANT: do not start dash_ui until
 # every widget pointer exists. Build 36 started dash_ui immediately and it called
 # lv_arc_set_* on NULL Page-1 arc pointers while ui_build was still constructing them.
@@ -100,21 +154,23 @@ pos=s.index(marker)
 builder=r'''static void startup_page_builder_task(void *arg)
 {
     (void)arg;
+    s_builder_task = xTaskGetCurrentTaskHandle();
+    s_builder_checkpoint_us = esp_timer_get_time();
     void (*builders[])(void) = { build_page1, build_page2, build_page3, build_page4 };
     for (int i = 0; i < 4; ++i) {
-        ESP_LOGI(TAG, "ASYNC PAGE %d BUILD START", i + 1);
+        ESP_LOGI(TAG, "ASYNC PAGE %d BUILD START: internal=%u PSRAM=%u", i + 1, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         if (!bsp_display_lock(-1)) { ESP_LOGE(TAG, "LVGL lock failed for page %d", i + 1); vTaskDelete(NULL); return; }
         builders[i]();
         bsp_display_unlock();
-        ESP_LOGI(TAG, "ASYNC PAGE %d BUILD DONE", i + 1);
+        ESP_LOGI(TAG, "ASYNC PAGE %d BUILD DONE: internal=%u PSRAM=%u", i + 1, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         vTaskDelay(pdMS_TO_TICKS(25));
     }
 
+    s_builder_task = NULL;
     /* All UI pointers are valid now. Switch off splash, then start live updates. */
-    if (bsp_display_lock(-1)) {
-        lv_screen_load(pages[0]);
-        bsp_display_unlock();
-    }
+    if (!bsp_display_lock(-1)) { vTaskDelete(NULL); return; }
+    lv_screen_load(pages[0]);
+    bsp_display_unlock();
     ESP_LOGI(TAG, "ASYNC PAGE BUILD COMPLETE - DASHBOARD LOADED");
 
     if (xTaskCreatePinnedToCore(ui_task, "dash_ui", 6144, NULL, 8, NULL, 1) != pdPASS) {
@@ -162,6 +218,7 @@ newstart=r'''esp_err_t dashboard_ui_start(void)
 }'''
 s=s[:sm.start()]+newstart+s[de:]
 
+if 'lv_label_set_text(p1_title[p1]' in s or 'lv_label_set_text(p1_value[p1]' in s: raise SystemExit('unsafe driver label writes remain')
 if '->repeat_count' in s: raise SystemExit('direct repeat_count remains')
 if re.search(r'\blv_timer_handler\s*\(',s): raise SystemExit('manual lv_timer_handler remains')
 p.write_text(s)
