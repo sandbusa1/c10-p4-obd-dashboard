@@ -249,5 +249,68 @@ for key, value in settings.items():
     config_text = re.sub(r'^# ' + key + r' is not set\n?', '', config_text, flags=re.M)
     config_text += f'\n{key}={value}\n'
 config.write_text(config_text)
+# Driver artwork follows the approved twin-gauge reference. The bitmap holds
+# only decoration: every reading, needle and selected gear remains live.
+import base64, zlib
+art = zlib.decompress(base64.b64decode(Path('artwork/driver_background.rgb565.zlib.b64').read_text()))
+if len(art) != 1024 * 600 * 2: raise SystemExit('Invalid driver artwork dimensions')
+(OUT/'main'/'driver_background.rgb565').write_bytes(art)
+cmake = OUT/'main'/'CMakeLists.txt'
+cmake.write_text(cmake.read_text().replace('EMBED_FILES "splash.rgb565"', 'EMBED_FILES "splash.rgb565" "driver_background.rgb565"'))
+# Helpers replaced by the static face are removed to keep warning-clean builds.
+a=s.index('static void driver_arc('); b=s.index('static void driver_needle_set(',a); s=s[:a]+s[b:]
+a=s.index('static void driver_scale_labels('); b=s.index('static void build_page1(',a); s=s[:a]+s[b:]
+s=s.replace('225.0f', '135.0f').replace('225 degrees at zero through 315 degrees at full scale', '135 degrees at zero through 405 degrees at full scale')
+a=s.index('    /* Factory-style Driver screen.')
+b=s.index('    /* Needle objects. */',a)
+s=s[:a]+r'''
+    static const lv_image_dsc_t face = {
+        .header = {.magic=LV_IMAGE_HEADER_MAGIC,.cf=LV_COLOR_FORMAT_RGB565,.flags=0,.w=1024,.h=600,.stride=2048},
+        .data_size = 1024*600*2,
+        .data = driver_background_rgb565_start,
+    };
+    lv_obj_t *background = lv_image_create(p);
+    lv_image_set_src(background, &face);
+    lv_obj_set_pos(background, 0, 0);
+    lv_obj_clear_flag(background, LV_OBJ_FLAG_CLICKABLE);
+
+'''+s[b:]
+s=s.replace('extern const uint8_t splash_rgb565_start[]', 'extern const uint8_t driver_background_rgb565_start[] asm("_binary_driver_background_rgb565_start");\nextern const uint8_t splash_rgb565_start[]')
+a=s.index('    /* Dark needle hubs')
+b=s.index('    /* Large live values',a)
+s=s[:a]+s[b:]
+s=s.replace('"0",126,232,268,80', '"0",126,187,268,64').replace('"0",622,232,284,80','"0",622,187,284,64')
+s=s.replace('lv_obj_set_style_transform_scale_x(drv_mph,384,0);','lv_obj_set_style_transform_pivot_x(drv_mph,134,0); lv_obj_set_style_transform_pivot_y(drv_mph,32,0); lv_obj_set_style_transform_scale_x(drv_mph,384,0);')
+s=s.replace('lv_obj_set_style_transform_scale_x(drv_rpm,384,0);','lv_obj_set_style_transform_pivot_x(drv_rpm,142,0); lv_obj_set_style_transform_pivot_y(drv_rpm,32,0); lv_obj_set_style_transform_scale_x(drv_rpm,384,0);')
+s=s.replace('"MPH",188,326','"MPH",188,272').replace('"RPM",694,326','"RPM",694,272')
+s=s.replace('    /* Lower factory pods:', '    driver_label(p,"x1000",694,311,140,28,&lv_font_montserrat_24,COL_LABEL,LV_TEXT_ALIGN_CENTER);\n\n    /* Lower factory pods:')
+a=s.index('    /* Lower factory pods:');b=s.index('    drv_cool_arc=lv_arc_create',a)
+s=s[:a]+s[b:]
+s=s.replace('55,405); lv_obj_set_size(drv_cool_arc,300,300)', '62,407); lv_obj_set_size(drv_cool_arc,286,286)')
+s=s.replace('669,405); lv_obj_set_size(drv_volt_arc,300,300)', '676,407); lv_obj_set_size(drv_volt_arc,286,286)')
+s=s.replace('lv_arc_set_rotation(drv_cool_arc,180)', 'lv_arc_set_rotation(drv_cool_arc,210)').replace('lv_arc_set_rotation(drv_volt_arc,180)','lv_arc_set_rotation(drv_volt_arc,210)')
+s=s.replace('"--- F",88,472,235,54','"---",88,483,235,54').replace('"--.- V",700,472,260,54','"--.-",689,483,260,54')
+s=s.replace('driver_label(p,"WATER TEMP",82,527,248,28,&lv_font_montserrat_24,COL_LABEL,LV_TEXT_ALIGN_CENTER);', 'driver_label(p,"F",175,531,60,24,&lv_font_montserrat_24,COL_LABEL,LV_TEXT_ALIGN_CENTER);')
+s=s.replace('driver_label(p,"VOLTS",752,527,155,28,&lv_font_montserrat_24,COL_LABEL,LV_TEXT_ALIGN_CENTER);','driver_label(p,"V",789,531,60,24,&lv_font_montserrat_24,COL_LABEL,LV_TEXT_ALIGN_CENTER);')
+s=s.replace('"%.0f F",d->ect_f', '"%.0f",d->ect_f').replace('"%.1f V",d->volts','"%.1f",d->volts')
+s=s.replace('180.0f*(cf-100.0f)', '120.0f*(cf-100.0f)').replace('180.0f*(vv-10.0f)','120.0f*(vv-10.0f)')
+s=s.replace('lv_obj_set_pos(pod,365,442)', 'lv_obj_set_pos(pod,365,450)')
+s=s.replace('"GEAR",462,542','"GEAR",462,556').replace('"Offline",430,570','"Offline",430,580')
+s=s.replace('"---",88,483', '"---",88,471').replace('"--.-",689,483', '"--.-",689,471')
+s=s.replace('"F",175,531', '"F",175,516').replace('"V",789,531','"V",789,516')
+s=s.replace('    driver_label(p,"GEAR",462,556,100,24,&lv_font_montserrat_24,COL_LABEL,LV_TEXT_ALIGN_CENTER);', '')
+s=s.replace('"Offline",430,580,164,22,&lv_font_montserrat_24', '"Offline",430,574,164,24,&lv_font_montserrat_16')
+config.write_text(config.read_text()+'\nCONFIG_LV_FONT_MONTSERRAT_16=y\n')
+s=s.replace('260,222,156,', '260,222,184,').replace('764,222,156,','764,222,184,')
+s=s.replace('    /* Large live values centered', '''    /* Inner faces cover the needle tails, keeping readings unobstructed. */
+    for (int g=0;g<2;g++) {
+        lv_obj_t *face_mask=lv_obj_create(p); lv_obj_remove_style_all(face_mask);
+        lv_obj_set_pos(face_mask,(g?764:260)-108,222-108); lv_obj_set_size(face_mask,216,216);
+        lv_obj_set_style_radius(face_mask,LV_RADIUS_CIRCLE,0);
+        lv_obj_set_style_bg_color(face_mask,lv_color_hex(0x010509),0);
+        lv_obj_set_style_bg_opa(face_mask,LV_OPA_COVER,0);
+        lv_obj_clear_flag(face_mask,LV_OBJ_FLAG_CLICKABLE);
+    }
+    /* Large live values centered''')
 p.write_text(s)
 print('Prepared firmware: PSRAM-backed LVGL allocator + safe live updates + yielding async startup.')
