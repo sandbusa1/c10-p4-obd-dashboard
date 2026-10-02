@@ -16,57 +16,94 @@ s=re.sub(r'lv_timer_create\(([^;]+?)\)->repeat_count\s*=\s*([^;]+);', r'lv_timer
 s=re.sub(r'\b([A-Za-z_]\w*)->repeat_count\s*=\s*([^;]+);', r'lv_timer_set_repeat_count(\1, \2);', s)
 s=re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', s)
 
-# Keep the UI, but replace only the Page 3 object tree that was proven to stall startup.
+# Page 3: copy the proven object structure from the uploaded known-good V3K ZIP.
+# One status bar + one scrolling panel + count label + ONE wrapped DTC label.
 a=s.index('static void build_page3(void)')
 z=s.index('\n\nstatic void log_refresh_view',a)
-safe3=r'''static void build_page3(void)
+good3=r'''static void build_page3(void)
 {
     lv_obj_t *p = pages[2] = lv_obj_create(NULL);
+    lv_obj_remove_style_all(p);
     lv_obj_set_style_bg_color(p, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(p);
     lv_label_set_text(title, "CODES");
     lv_obj_set_pos(title, 32, 16);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(COL_VALUE), 0);
 
-    l3_status = lv_label_create(p);
+    lv_obj_t *status_bar = lv_obj_create(p);
+    lv_obj_remove_style_all(status_bar);
+    lv_obj_set_pos(status_bar, 32, 64);
+    lv_obj_set_size(status_bar, 960, 34);
+    lv_obj_set_style_border_width(status_bar, 1, 0);
+    lv_obj_set_style_border_color(status_bar, lv_color_hex(COL_CARD_BORDER), 0);
+    lv_obj_set_style_radius(status_bar, 10, 0);
+    lv_obj_set_style_bg_opa(status_bar, LV_OPA_TRANSP, 0);
+    l3_status = lv_label_create(status_bar);
     lv_label_set_text(l3_status, "Offline");
-    lv_obj_set_pos(l3_status, 32, 62);
-    lv_obj_set_width(l3_status, 960);
+    lv_obj_set_pos(l3_status, 0, 0);
+    lv_obj_set_size(l3_status, 960, 34);
     lv_obj_set_style_text_align(l3_status, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(l3_status, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(l3_status, lv_color_hex(COL_VALUE), 0);
 
-    l3_dtccount = lv_label_create(p);
+    lv_obj_t *panel = lv_obj_create(p);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_pos(panel, 32, 112);
+    lv_obj_set_size(panel, 960, 300);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(COL_CARD_BG), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(COL_CARD_BORDER), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_radius(panel, 16, 0);
+    lv_obj_set_scroll_dir(panel, LV_DIR_VER);
+
+    l3_dtccount = lv_label_create(panel);
     lv_label_set_text(l3_dtccount, "DTC COUNT: 0");
-    lv_obj_set_pos(l3_dtccount, 48, 120);
+    lv_obj_set_pos(l3_dtccount, 20, 18);
     lv_obj_set_style_text_font(l3_dtccount, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(l3_dtccount, lv_color_hex(COL_LABEL), 0);
 
-    l3_dtcs = lv_label_create(p);
+    l3_dtcs = lv_label_create(panel);
     lv_label_set_text(l3_dtcs, "No codes stored");
-    lv_obj_set_pos(l3_dtcs, 48, 165);
-    lv_obj_set_size(l3_dtcs, 920, 235);
+    lv_obj_set_pos(l3_dtcs, 20, 60);
+    lv_obj_set_width(l3_dtcs, 900);
+    lv_obj_set_height(l3_dtcs, LV_SIZE_CONTENT);
     lv_label_set_long_mode(l3_dtcs, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(l3_dtcs, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(l3_dtcs, lv_color_hex(COL_VALUE), 0);
 
     lv_obj_t *r = lv_button_create(p);
-    lv_obj_set_pos(r, 32, 428); lv_obj_set_size(r, 460, 64);
+    lv_obj_set_pos(r, 32, 428);
+    lv_obj_set_size(r, 460, 64);
     lv_obj_add_event_cb(r, refresh_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *rl = lv_label_create(r); lv_label_set_text(rl, "READ CODES"); lv_obj_center(rl);
+    lv_obj_t *rl = lv_label_create(r);
+    lv_label_set_text(rl, "READ CODES");
+    lv_obj_clear_flag(rl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_text_font(rl, &lv_font_montserrat_24, 0);
+    lv_obj_center(rl);
 
     lv_obj_t *cbtn = lv_button_create(p);
-    lv_obj_set_pos(cbtn, 524, 428); lv_obj_set_size(cbtn, 460, 64);
+    lv_obj_set_pos(cbtn, 524, 428);
+    lv_obj_set_size(cbtn, 460, 64);
     lv_obj_set_style_bg_color(cbtn, lv_color_hex(0x8E1B1B), 0);
     lv_obj_add_event_cb(cbtn, clear_cb, LV_EVENT_CLICKED, NULL);
-    l3_clear_label = lv_label_create(cbtn); lv_label_set_text(l3_clear_label, "RESET CODES"); lv_obj_center(l3_clear_label);
-    nav_row(p, 1, 3, 3);
+    lv_obj_t *cl = lv_label_create(cbtn);
+    l3_clear_label = cl;
+    lv_label_set_text(cl, "RESET CODES");
+    lv_obj_clear_flag(cl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_text_font(cl, &lv_font_montserrat_24, 0);
+    lv_obj_center(cl);
+
+    nav_row(p, 1, 4, 3);
 }
 '''
-s=s[:a]+safe3+s[z:]
+s=s[:a]+good3+s[z:]
 
-# Build pages outside app_main's startup path. The splash is loaded first and the
-# BSP lock is released so LVGL can render it while the rest of the UI is created.
+# Preserve the splash-first/async startup from build 35 so the heavier new UI
+# cannot starve the display task. Page 3 itself is now the proven good object tree.
 marker='esp_err_t dashboard_ui_start(void)'
 pos=s.index(marker)
 builder=r'''static void startup_page_builder_task(void *arg)
@@ -99,7 +136,7 @@ for i in range(brace,len(s)):
 if de is None: raise SystemExit('dashboard_ui_start end not found')
 newstart=r'''esp_err_t dashboard_ui_start(void)
 {
-    ESP_LOGI(TAG, "ESP32-P4 7B OBD - known-good ZIP + async UI");
+    ESP_LOGI(TAG, "ESP32-P4 7B OBD - known-good Page 3 + async UI");
     bsp_display_cfg_t cfg = {
         .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
         .rotation = ESP_LV_ADAPTER_ROTATE_0,
@@ -130,4 +167,4 @@ s=s[:sm.start()]+newstart+s[de:]
 if '->repeat_count' in s: raise SystemExit('direct repeat_count remains')
 if re.search(r'\blv_timer_handler\s*\(',s): raise SystemExit('manual lv_timer_handler remains')
 p.write_text(s)
-print('Prepared firmware from known-good ZIP: UI retained, splash first, async pages, safe Page 3.')
+print('Prepared firmware: build-35 base + exact known-good V3K Page 3 object tree.')
