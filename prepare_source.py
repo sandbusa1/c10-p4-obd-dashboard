@@ -165,6 +165,7 @@ builder=r'''static void startup_page_builder_task(void *arg)
     s_ui_boot_us = esp_timer_get_time();
     build_splash();
     lv_screen_load(splash_screen);
+    const int64_t splash_loaded_us = esp_timer_get_time();
     bsp_display_unlock();
     ESP_LOGI(TAG, "SPLASH LOADED - BUILDING UI BEFORE LIVE UPDATE TASK");
     vTaskDelay(pdMS_TO_TICKS(3) > 0 ? pdMS_TO_TICKS(3) : 1);
@@ -178,6 +179,11 @@ builder=r'''static void startup_page_builder_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(25));
     }
 
+    /* Keep the splash visible for at least three seconds, without holding
+       the LVGL lock. All page construction can finish during this interval. */
+    while (esp_timer_get_time() - splash_loaded_us < 3000000) {
+        vTaskDelay(pdMS_TO_TICKS(10) > 0 ? pdMS_TO_TICKS(10) : 1);
+    }
     s_builder_task = NULL;
     /* All UI pointers are valid now. Switch off splash, then start live updates. */
     if (!bsp_display_lock(-1)) { vTaskDelete(NULL); return; }
