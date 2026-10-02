@@ -66,6 +66,31 @@ safe3=r'''static void build_page3(void)
 '''
 s=s[:a]+safe3+s[z:]
 
+# Apply the live-update safety repair kept in repairs/.  The driver page uses
+# dedicated gauges, so p1_title[]/p1_value[] are intentionally NULL.  Writing
+# through those arrays can crash as soon as live OBD data arrives.  Apply every
+# hunk exactly and fail preparation if the archived source no longer matches.
+def apply_repair(text, patch_path):
+    patch = patch_path.read_text().splitlines()
+    hunks=[]; cur=None
+    for line in patch:
+        if line.startswith('@@'):
+            if cur is not None: hunks.append(cur)
+            cur=[]
+        elif cur is not None:
+            if line.startswith(('---','+++')): continue
+            if line.startswith((' ', '+', '-')): cur.append(line)
+    if cur is not None: hunks.append(cur)
+    for n,h in enumerate(hunks,1):
+        old='\n'.join(x[1:] for x in h if not x.startswith('+'))
+        new='\n'.join(x[1:] for x in h if not x.startswith('-'))
+        if old not in text:
+            raise SystemExit(f'Live-update repair hunk {n} no longer matches dashboard_ui.c')
+        text=text.replace(old,new,1)
+    return text
+
+s=apply_repair(s, Path('repairs/lvgl_live_update_fix.patch'))
+
 # Insert an asynchronous builder before dashboard_ui_start. Each page gets its own
 # lock window and an unlocked scheduler gap, matching the Waveshare BSP ownership model.
 marker='esp_err_t dashboard_ui_start(void)'
@@ -127,7 +152,12 @@ newstart=r'''esp_err_t dashboard_ui_start(void)
 }'''
 s=s[:sm.start()]+newstart+s[de:]
 
+# Static safety assertions: fail CI instead of shipping a known bad image.
 if '->repeat_count' in s: raise SystemExit('direct repeat_count remains')
 if re.search(r'\blv_timer_handler\s*\(',s): raise SystemExit('manual lv_timer_handler remains')
+if 'lv_label_set_text(p1_title[p1]' in s or 'lv_label_set_text(p1_value[p1]' in s:
+    raise SystemExit('unsafe Page 1 live-label writes remain')
+if 'text_if(p2_title[p2]' not in s or 'text_if(p2_value[p2]' not in s:
+    raise SystemExit('live Page 2 null-safe update repair missing')
 p.write_text(s)
-print('Prepared firmware: Waveshare BSP startup; splash first; async page build; safe Page 3.')
+print('Prepared firmware: Waveshare BSP startup; splash first; async page build; safe Page 3; live OBD update repair applied.')
