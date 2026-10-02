@@ -23,6 +23,7 @@ jobs:
         run: |
           . /opt/esp/idf/export.sh
           python /opt/esp/idf/tools/idf.py set-target esp32p4
+          python -c 'from pathlib import Path; s=Path("sdkconfig").read_text(); required=("CONFIG_LV_USE_CLIB_MALLOC=y", "CONFIG_SPIRAM_USE_MALLOC=y"); missing=[v for v in required if v not in s.splitlines()]; assert not missing, f"Required LVGL allocator settings missing: {missing}"'
           python /opt/esp/idf/tools/idf.py build
 
       - name: Collect firmware
