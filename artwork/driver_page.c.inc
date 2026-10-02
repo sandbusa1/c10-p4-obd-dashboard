@@ -38,6 +38,12 @@ static void build_page1(void)
     lv_obj_set_pos(background, 0, 0);
     lv_obj_clear_flag(background, LV_OBJ_FLAG_CLICKABLE);
 
+    for(int g=0;g<2;g++) {
+        lv_obj_t *track=driver_active_arc(p,g?732:294,236);
+        lv_arc_set_bg_angles(track,0,270);
+        lv_obj_set_style_arc_width(track,14,LV_PART_MAIN);
+        lv_obj_set_style_arc_color(track,lv_color_hex(0x073A64),LV_PART_MAIN);
+    }
     drv_speed_active_arc=driver_active_arc(p,294,236);
     drv_rpm_active_arc=driver_active_arc(p,732,236);
     drv_speed_needle=lv_line_create(p);
@@ -59,22 +65,21 @@ static void build_page1(void)
     /* Static lower scales are artwork; readings remain live. */
     drv_cool_arc=NULL;
     drv_volt_arc=NULL;
-    for(int g=0;g<4;g++) {
-        drv_gear_box[g]=lv_obj_create(p);
-        lv_obj_remove_style_all(drv_gear_box[g]);
-        lv_obj_set_pos(drv_gear_box[g],389+g*64,454);
-        lv_obj_set_size(drv_gear_box[g],54,53);
-        lv_obj_set_style_radius(drv_gear_box[g],8,0);
-        lv_obj_set_style_border_width(drv_gear_box[g],2,0);
-        lv_obj_set_style_border_color(drv_gear_box[g],lv_color_hex(0x009DEE),0);
-        lv_obj_set_style_bg_color(drv_gear_box[g],lv_color_hex(0x010509),0);
-        lv_obj_set_style_bg_opa(drv_gear_box[g],LV_OPA_COVER,0);
-        lv_obj_clear_flag(drv_gear_box[g],LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(drv_gear_box[g],LV_OBJ_FLAG_CLICKABLE);
-        char gb[2]={(char)('1'+g),0};
-        driver_label(drv_gear_box[g],gb,0,-1,54,53,&driver_digits_48,COL_VALUE,LV_TEXT_ALIGN_CENTER);
-    }
-    drv_gear=NULL;
+    lv_obj_t *gear_pod=lv_obj_create(p);
+    lv_obj_remove_style_all(gear_pod);
+    lv_obj_set_pos(gear_pod,383,451);lv_obj_set_size(gear_pod,259,65);
+    lv_obj_set_style_radius(gear_pod,8,0);
+    lv_obj_set_style_bg_color(gear_pod,lv_color_hex(0x010509),0);
+    lv_obj_set_style_bg_opa(gear_pod,LV_OPA_COVER,0);
+    lv_obj_clear_flag(gear_pod,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(gear_pod,LV_OBJ_FLAG_CLICKABLE);
+    drv_gear=driver_label(gear_pod,"-",0,0,259,60,&driver_digits_48,COL_VALUE,LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_style_transform_pivot_x(drv_gear,129,0);
+    lv_obj_set_style_transform_pivot_y(drv_gear,30,0);
+    lv_obj_set_style_transform_scale_x(drv_gear,320,0);
+    lv_obj_set_style_transform_scale_y(drv_gear,320,0);
+    driver_label(p,"GEAR",452,514,120,22,&lv_font_montserrat_16,COL_LABEL,LV_TEXT_ALIGN_CENTER);
+    for(int i=0;i<4;i++) drv_gear_box[i]=NULL;
     l1_status=driver_label(p,"Offline",430,578,164,22,&lv_font_montserrat_16,COL_LABEL,LV_TEXT_ALIGN_CENTER);
     lv_obj_t *next=lv_button_create(p);
     lv_obj_remove_style_all(next);
