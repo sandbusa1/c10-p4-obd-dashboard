@@ -20,7 +20,9 @@ static void driver_gauge_position(float mph,float rpm)
     driver_needle_set(drv_speed_needle,drv_speed_pts,294,236,192,mph,160);
     driver_needle_set(drv_rpm_needle,drv_rpm_pts,732,236,192,rpm,7000);
     lv_arc_set_bg_angles(drv_speed_active_arc,0,(int)(270.0f*mph/160.0f));
-    lv_arc_set_bg_angles(drv_rpm_active_arc,0,(int)(270.0f*rpm/7000.0f));
+    /* The blue fill stops at the artwork redline boundary; needle continues. */
+    int rpm_angle=(int)(270.0f*rpm/7000.0f);
+    lv_arc_set_bg_angles(drv_rpm_active_arc,0,rpm_angle>185?185:rpm_angle);
 }
 static void build_page1(void)
 {
@@ -40,7 +42,7 @@ static void build_page1(void)
 
     for(int g=0;g<2;g++) {
         lv_obj_t *track=driver_active_arc(p,g?732:294,236);
-        lv_arc_set_bg_angles(track,0,270);
+        lv_arc_set_bg_angles(track,0,g?185:270);
         lv_obj_set_style_arc_width(track,14,LV_PART_MAIN);
         lv_obj_set_style_arc_color(track,lv_color_hex(0x073A64),LV_PART_MAIN);
     }
