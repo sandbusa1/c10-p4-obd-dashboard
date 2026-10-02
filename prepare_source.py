@@ -87,11 +87,8 @@ if b >= 0:
     bb = re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', bb)
     s = s[:b] + bb + s[be:]
 
-# The real board shows IDLE0 starvation *inside* a single heavy page builder.
-# Yielding only between pages is therefore too late. Add a 1-tick scheduler
-# yield after simple LVGL calls in every build_pageN() function. We keep the
-# display lock held, so no other task can mutate the tree while it is half-built;
-# the delay simply lets IDLE0 run and service its watchdog subscription.
+# Yield frequently inside each heavy page builder so IDLE0 cannot be starved
+# for the 5-second TWDT window. The LVGL adapter owns lv_timer_handler().
 def function_span(text, name):
     m = re.search(r'(?m)^\s*static\s+void\s+' + re.escape(name) + r'\s*\([^)]*\)\s*\{', text)
     if not m: return None
@@ -117,12 +114,11 @@ for n in range(1, 6):
     for line in lines:
         out.append(line)
         stripped = line.strip()
-        # Only standalone statements. Never alter for/while headers or braces.
         if (stripped.endswith(';') and
             not stripped.startswith(('for ', 'for(', 'while ', 'while(', 'if ', 'if(', 'return', '//', '/*', '*')) and
             'vTaskDelay(' not in stripped):
             indent = line[:len(line)-len(line.lstrip())]
-            out.append(indent + 'vTaskDelay(pdMS_TO_TICKS(1));\n')
+            out.append(indent + 'vTaskDelay(pdMS_TO_TICKS(2));\n')
             injected += 1
     if injected == 0:
         raise SystemExit(f'No startup yields injected into {name}')
@@ -156,9 +152,11 @@ if len(page_calls) < 3:
 
 def split_page(m):
     indent, num = m.group(1), m.group(2)
-    return (f'{indent}build_page{num}();\n'
+    return (f'{indent}ESP_LOGI(TAG, "PAGE {num} BUILD START");\n'
+            f'{indent}build_page{num}();\n'
+            f'{indent}ESP_LOGI(TAG, "PAGE {num} BUILD DONE - releasing LVGL for render/yield");\n'
             f'{indent}bsp_display_unlock();\n'
-            f'{indent}vTaskDelay(pdMS_TO_TICKS(1));\n'
+            f'{indent}vTaskDelay(pdMS_TO_TICKS(10));\n'
             f'{indent}if (!bsp_display_lock(-1)) {{\n'
             f'{indent}    ESP_LOGE(TAG, "Failed to reacquire display lock after Page {num}");\n'
             f'{indent}    {error_return}\n'
@@ -171,4 +169,4 @@ if '->repeat_count' in s: raise SystemExit('Unrepaired repeat_count access remai
 if re.search(r'\blv_timer_handler\s*\(', s): raise SystemExit('Manual lv_timer_handler remains')
 if 'bsp_display_lock(0)' in s: raise SystemExit('Zero-time display lock remains')
 p.write_text(s)
-print('Prepared firmware: compile/runtime fixes + watchdog-safe yields inside page builders.')
+print('Prepared firmware: aggressive startup scheduling + 2ms internal yields + 10ms unlocked page yields.')
