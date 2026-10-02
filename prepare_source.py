@@ -312,5 +312,10 @@ s=s.replace('    /* Large live values centered', '''    /* Inner faces cover the
         lv_obj_clear_flag(face_mask,LV_OBJ_FLAG_CLICKABLE);
     }
     /* Large live values centered''')
+s=s.replace('ESP32-P4 7B OBD - race-free async UI', 'ESP32-P4 7B OBD - DRIVER_ART_V2 ROTATION=180 SPLASH=3S')
 p.write_text(s)
+written = p.read_text()
+for marker in ('driver_background_rgb565_start', 'ESP_LV_ADAPTER_ROTATE_180', 'splash_loaded_us < 3000000'):
+    if marker not in written: raise SystemExit(f'Prepared source missing {marker}: {p.resolve()}')
+print(f'Verified source: {p.resolve()} | DRIVER_ART_V2 | ROTATION=180 | SPLASH=3S')
 print('Prepared firmware: PSRAM-backed LVGL allocator + safe live updates + yielding async startup.')
