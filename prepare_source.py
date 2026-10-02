@@ -87,14 +87,30 @@ if b >= 0:
     bb = re.sub(r'\s*lv_timer_handler\s*\(\s*\)\s*;', '', bb)
     s = s[:b] + bb + s[be:]
 
-# Hardware log from commit 48499c3 proved startup starves IDLE0 while main builds
-# Page 3 (build_page3 -> lv_label_set_text). Keep the exact UI, but do not hold
-# the display lock continuously while constructing all five pages. Release/yield/
-# reacquire between page builders so the LVGL task and IDLE0 can run.
-ds = s.index('void dashboard_ui_start(void)')
-de = s.find('\n}', ds)
-if de < 0: raise SystemExit('dashboard_ui_start end not found')
-de += 2
+# Startup watchdog fix: find the real dashboard start function regardless of
+# return type/qualifiers, then release/yield/reacquire between heavy page builds.
+start_match = re.search(r'(?m)^\s*(?:static\s+)?(?:void|esp_err_t)\s+dashboard_ui_start\s*\(\s*void\s*\)\s*\{', s)
+if not start_match:
+    # Some source versions take no explicit void token: dashboard_ui_start()
+    start_match = re.search(r'(?m)^\s*(?:static\s+)?(?:void|esp_err_t)\s+dashboard_ui_start\s*\(\s*\)\s*\{', s)
+if not start_match:
+    raise SystemExit('dashboard_ui_start function not found')
+ds = start_match.start()
+
+# Brace-match the whole function instead of assuming the first newline-brace is its end.
+brace = s.find('{', start_match.start(), start_match.end())
+depth = 0
+de = None
+for i in range(brace, len(s)):
+    if s[i] == '{': depth += 1
+    elif s[i] == '}':
+        depth -= 1
+        if depth == 0:
+            de = i + 1
+            break
+if de is None:
+    raise SystemExit('dashboard_ui_start closing brace not found')
+
 db = s[ds:de]
 page_calls = re.findall(r'(?m)^(\s*)build_page([1-5])\(\);\s*$', db)
 if len(page_calls) < 3:
