@@ -73,9 +73,9 @@ static void build_page1(void)
     lv_obj_set_style_bg_opa(gear_pod,LV_OPA_COVER,0);
     lv_obj_clear_flag(gear_pod,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(gear_pod,LV_OBJ_FLAG_CLICKABLE);
-    drv_gear=driver_label(gear_pod,"-",0,0,259,60,&driver_digits_48,COL_VALUE,LV_TEXT_ALIGN_CENTER);
+    drv_gear=driver_label(gear_pod,"-",0,8,259,53,&driver_digits_48,COL_VALUE,LV_TEXT_ALIGN_CENTER);
     lv_obj_set_style_transform_pivot_x(drv_gear,129,0);
-    lv_obj_set_style_transform_pivot_y(drv_gear,30,0);
+    lv_obj_set_style_transform_pivot_y(drv_gear,26,0);
     lv_obj_set_style_transform_scale_x(drv_gear,320,0);
     lv_obj_set_style_transform_scale_y(drv_gear,320,0);
     driver_label(p,"GEAR",452,514,120,22,&lv_font_montserrat_16,COL_LABEL,LV_TEXT_ALIGN_CENTER);
