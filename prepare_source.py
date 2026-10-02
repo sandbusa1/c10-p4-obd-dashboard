@@ -87,10 +87,15 @@ good3=r'''static void build_page3(void)
     lv_obj_t *cl = lv_label_create(cbtn); l3_clear_label = cl;
     lv_label_set_text(cl, "RESET CODES"); lv_obj_clear_flag(cl, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_text_font(cl, &lv_font_montserrat_24, 0); lv_obj_center(cl);
-    nav_row(p, 1, 4, 3);
+    nav_row(p, 1, 3, 3);
 }
 '''
 s=s[:a]+good3+s[z:]
+# Four-page startup: never load an unbuilt screen from a navigation callback.
+nav_guard = '    if (p < 0 || p > 4) return;'
+if nav_guard not in s: raise SystemExit('Navigation guard no longer matches')
+s=s.replace(nav_guard, '    if (p < 0 || p >= 4 || !pages[p]) return;', 1)
+
 
 def apply_repair(text, patch_path):
     patch = patch_path.read_text().splitlines()
