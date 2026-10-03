@@ -347,7 +347,9 @@ static bool query_gear(void)
     char r[512] = "";
     bool vpw = s_active_protocol == 2;
     bool addressed = !vpw || gear_header("ATSH6C10F1");
-    bool replied = addressed && elm_cmd("22199A",r,sizeof(r),900);
+    /* P01/0411 VPW requires the trailing 01 byte (verified on this PCM). */
+    const char *request = vpw ? "22199A01" : "22199A";
+    bool replied = addressed && elm_cmd(request,r,sizeof(r),900);
     /* Restore functional OBD addressing even after a timeout or header error. */
     bool restored = !vpw || gear_header("ATSH686AF1");
     int g = replied ? decode_22199a(r) : 0;
@@ -357,15 +359,15 @@ static bool query_gear(void)
     s_d.seq++;
     xSemaphoreGive(s_lock);
     for (char *c=r; *c; ++c) if (*c=='\r' || *c=='\n' || *c=='>') *c=' ';
-    ESP_LOGI(TAG,"GEAR_VPW_ADDRESS header=%s set=%d reply=%d restore=%d raw=%.120s decoded=%d",
-             vpw?"6C10F1":"default",addressed,replied,restored,r,g);
+    ESP_LOGI(TAG,"GEAR_VPW_ADDRESS request=%s header=%s set=%d reply=%d restore=%d raw=%.120s decoded=%d",
+             request,vpw?"6C10F1":"default",addressed,replied,restored,r,g);
     /* Preserve useful replies on the SD card for review after a drive. */
     static int last_gear = -1;
     static int64_t last_log_us;
     int64_t now = esp_timer_get_time();
     if (g != last_gear || now-last_log_us >= 5000000) {
         sd_logger_event("GEAR", "header=%s set=%d reply=%d restore=%d raw=%.120s decoded=%d",
-                        vpw?"6C10F1":"default",addressed,replied,restored,r,g);
+                        request,vpw?"6C10F1":"default",addressed,replied,restored,r,g);
         last_gear=g; last_log_us=now;
     }
     /* Stop polling and reconnect if we cannot restore normal addressing. */
