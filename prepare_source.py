@@ -360,8 +360,72 @@ obd_path.write_text(obd)
 p.write_text(p.read_text().replace('DRIVER_REFERENCE_V3 ROTATION=',
                                   'DRIVER_REFERENCE_V3 GEAR_COMMANDED_ONLY ROTATION='))
 print('Verified gear: GEAR_COMMANDED_ONLY | assumed Drive | no range/speed gate')
+# Splash and startup motion run independently of incoming OBD samples.
+s = p.read_text()
+s = s.replace('static int64_t s_ui_boot_us;', 'static bool s_sweep_active;')
+s = s.replace('    s_ui_boot_us = esp_timer_get_time();\n', '')
+a = s.index('    int64_t age_ms=')
+b = s.index('    if(d->gear_valid', a)
+s = s[:a] + '''    if (!s_sweep_active) {
+        snprintf(b,sizeof(b),"%.0f",mph); text_if(drv_mph,b);
+        snprintf(b,sizeof(b),"%d",(int)rpm); text_if(drv_rpm,b);
+        driver_gauge_position(mph,rpm);
+    }
+    snprintf(b,sizeof(b),"%.0f",d->ect_f); text_if(drv_cool,b);
+    snprintf(b,sizeof(b),"%.1f",d->volts); text_if(drv_volts,b);
+''' + s[b:]
+a = s.index('static void splash_done_cb(')
+b = s.index('static void build_splash(void)', a)
+s = s[:a] + '''/* LVGL adapter owns animation callbacks and its display lock. */
+static void startup_sweep_step(void *unused, int32_t value)
+{
+    (void)unused;
+    char text[24];
+    float fraction = value / 1000.0f;
+    driver_gauge_position(160.0f*fraction, 7000.0f*fraction);
+    snprintf(text,sizeof(text),"%.0f",160.0f*fraction); text_if(drv_mph,text);
+    snprintf(text,sizeof(text),"%d",(int)(7000.0f*fraction)); text_if(drv_rpm,text);
+}
+static void startup_sweep_done(lv_anim_t *animation)
+{
+    (void)animation;
+    s_sweep_active = false;
+}
+static void start_startup_sweep(void)
+{
+    if (!s_startup_sweep) return;
+    s_sweep_active = true;
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, drv_speed_needle);
+    lv_anim_set_exec_cb(&animation, startup_sweep_step);
+    lv_anim_set_values(&animation, 0, 1000);
+    lv_anim_set_duration(&animation, 2000);
+    lv_anim_set_reverse_duration(&animation, 2000);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_in_out);
+    lv_anim_set_completed_cb(&animation, startup_sweep_done);
+    lv_anim_start(&animation);
+}
+''' + s[b:]
+anchor = 'lv_obj_set_pos(im,0,0);'
+if s.count(anchor) != 1: raise SystemExit('Splash image anchor changed')
+s = s.replace(anchor, anchor + '''
+    /* Fully filled cyan bar over the partial bar in the source artwork. */
+    lv_obj_t *bar = lv_obj_create(splash_screen);
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_pos(bar,310,548); lv_obj_set_size(bar,403,12);
+    lv_obj_set_style_radius(bar,5,0);
+    lv_obj_set_style_bg_color(bar,lv_color_hex(0x12BFFF),0);
+    lv_obj_set_style_bg_opa(bar,LV_OPA_COVER,0);
+    lv_obj_clear_flag(bar,LV_OBJ_FLAG_CLICKABLE);
+''', 1)
+s = s.replace('splash_loaded_us < 3000000', 'splash_loaded_us < 4000000')
+s = s.replace('at least three seconds', 'at least four seconds')
+s = s.replace('    lv_screen_load(pages[0]);\n', '    lv_screen_load(pages[0]);\n    start_startup_sweep();\n', 1)
+s = s.replace('SPLASH=3S', 'SPLASH=4S SWEEP=4S')
+p.write_text(s)
 written = p.read_text()
-for marker in ('driver_background_rgb565_start', 'ESP_LV_ADAPTER_ROTATE_180', 'splash_loaded_us < 3000000'):
+for marker in ('driver_background_rgb565_start', 'ESP_LV_ADAPTER_ROTATE_180', 'splash_loaded_us < 4000000'):
     if marker not in written: raise SystemExit(f'Prepared source missing {marker}: {p.resolve()}')
-print(f'Verified source: {p.resolve()} | DRIVER_REFERENCE_V3 | ROTATION=180 | SPLASH=3S')
+print(f'Verified source: {p.resolve()} | DRIVER_REFERENCE_V3 | ROTATION=180 | SPLASH=4S | SWEEP=4S')
 print('Prepared firmware: PSRAM-backed LVGL allocator + safe live updates + yielding async startup.')
