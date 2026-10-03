@@ -336,17 +336,40 @@ static int decode_22199a(const char *r)
     return 0;
 }
 
-static void query_gear(void)
+static bool gear_header(const char *command)
+{
+    char reply[128] = "";
+    return elm_cmd(command,reply,sizeof(reply),1200) && strstr(reply,"OK") != NULL;
+}
+
+static bool query_gear(void)
 {
     char r[512] = "";
-    bool replied = elm_cmd("22199A",r,sizeof(r),900);
+    bool vpw = s_active_protocol == 2;
+    bool addressed = !vpw || gear_header("ATSH6C10F1");
+    bool replied = addressed && elm_cmd("22199A",r,sizeof(r),900);
+    /* Restore functional OBD addressing even after a timeout or header error. */
+    bool restored = !vpw || gear_header("ATSH686AF1");
     int g = replied ? decode_22199a(r) : 0;
     xSemaphoreTake(s_lock,portMAX_DELAY);
     s_d.gear_valid = (g >= 1 && g <= 4);
     s_d.gear = g;
     s_d.seq++;
     xSemaphoreGive(s_lock);
-    ESP_LOGI(TAG,"GEAR_COMMANDED_ONLY 22199A raw=%.120s decoded=%d",r,g);
+    for (char *c=r; *c; ++c) if (*c=='\r' || *c=='\n' || *c=='>') *c=' ';
+    ESP_LOGI(TAG,"GEAR_VPW_ADDRESS header=%s set=%d reply=%d restore=%d raw=%.120s decoded=%d",
+             vpw?"6C10F1":"default",addressed,replied,restored,r,g);
+    /* Preserve useful replies on the SD card for review after a drive. */
+    static int last_gear = -1;
+    static int64_t last_log_us;
+    int64_t now = esp_timer_get_time();
+    if (g != last_gear || now-last_log_us >= 5000000) {
+        sd_logger_event("GEAR", "header=%s set=%d reply=%d restore=%d raw=%.120s decoded=%d",
+                        vpw?"6C10F1":"default",addressed,replied,restored,r,g);
+        last_gear=g; last_log_us=now;
+    }
+    /* Stop polling and reconnect if we cannot restore normal addressing. */
+    return restored;
 }
 
 ''' + obd[b:]
@@ -356,9 +379,22 @@ for old in ('        uint32_t range_poll = 0;\n',
     obd = obd.replace(old, '', 1)
 obd = obd.replace('Range is slow because the lever rarely moves.',
                   'Display assumes Drive; only commanded gear is requested.')
+# Track the active connection rather than treating a cached protocol as live.
+obd = obd.replace('static bool apply_functional_header(', 'static uint8_t s_active_protocol;\n\nstatic bool apply_functional_header(', 1)
+obd = obd.replace('if (proto == 2 && is_vx) h = "ATSH6C10F1";', 'if (proto == 2) h = "ATSH686AF1";')
+obd = obd.replace('    char r[128] = "";\n    const char *h = NULL;', '    (void)is_vx;\n    char r[128] = "";\n    const char *h = NULL;', 1)
+obd = obd.replace('    char name[24];', '    s_active_protocol = s_cached_proto;\n    char name[24];', 1)
+obd = obd.replace('    s_uds_only = false;', '    s_uds_only = false;\n    s_active_protocol = 0;', 1)
+obd = obd.replace('            if (pn) save_vehicle_profile(pn, NULL);', '            s_active_protocol = pn;\n            if (pn) save_vehicle_profile(pn, NULL);', 1)
+obd = obd.replace('            save_vehicle_profile(pn, NULL);', '            s_active_protocol = pn;\n            save_vehicle_profile(pn, NULL);', 1)
+obd = obd.replace('{"ATSP2", "J1850 VPW", "ATSH6C10F1"}', '{"ATSP2", "J1850 VPW", "ATSH686AF1"}')
+obd = obd.replace('6C 10 F1 = functional PCM request.', '68 6A F1 = functional OBD request; gear reads use 6C 10 F1.')
+old = 'if((gear_poll++ % 4U)==0U) query_gear();'
+if obd.count(old) != 1: raise SystemExit('Gear polling source changed')
+obd = obd.replace(old, 'if((gear_poll++ % 4U)==0U && !query_gear()) break;')
 obd_path.write_text(obd)
 p.write_text(p.read_text().replace('DRIVER_REFERENCE_V3 ROTATION=',
-                                  'DRIVER_REFERENCE_V3 GEAR_COMMANDED_ONLY ROTATION='))
+                                  'DRIVER_REFERENCE_V3 GEAR_COMMANDED_ONLY GEAR_VPW_ADDRESS ROTATION='))
 print('Verified gear: GEAR_COMMANDED_ONLY | assumed Drive | no range/speed gate')
 # Splash and startup motion run independently of incoming OBD samples.
 s = p.read_text()
