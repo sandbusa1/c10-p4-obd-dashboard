@@ -62,6 +62,7 @@ pos = s.index('static void set_speed_digits(float mph)\n{')
 s = s[:pos] + (root/'enhancements/logging_ui.c.inc').read_text() + '\n' + s[pos:]
 s = s.replace('bool need_log_refresh = (page_now == 3)', 'bool need_log_refresh = (page_now == 4)')
 s = s.replace('if (d.seq != last || need_log_refresh || clear_confirm_expired)', 'if (true)')
+s = s.replace('    uint32_t last = 0;\n', '').replace('                    last = d.seq;\n', '')
 s = s.replace('if (d.seq != last) {\n                    update_ui', 'if (true) {\n                    update_ui')
 s = s.replace('log_refresh_view();', 'pcm_refresh_view();')
 s = s.replace('build_page3, build_page4 };', 'build_page3, build_page4, build_pcm_page };')

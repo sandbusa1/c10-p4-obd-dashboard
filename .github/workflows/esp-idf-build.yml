@@ -30,7 +30,9 @@ jobs:
         if: success()
         shell: bash
         run: |
-          mkdir -p artifacts
+          mkdir -p artifacts/bootloader artifacts/partition_table
+          cp firmware/build/bootloader/bootloader.bin artifacts/bootloader/
+          cp firmware/build/partition_table/partition-table.bin artifacts/partition_table/
           cp firmware/build/*.bin artifacts/ || true
           cp firmware/build/*.elf artifacts/ || true
           cp firmware/build/flash_args artifacts/ || true
