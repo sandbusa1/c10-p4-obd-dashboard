@@ -98,4 +98,5 @@ t=t.replace('        discover_and_cache_standard_vin();','        discover_and_c
 t=t.replace('        set_state("ADAPTER_READY"); elm_init(); detect_adapter();', '        xSemaphoreTake(s_lock,portMAX_DELAY);\n        s_d.gear=0;s_d.gear_valid=false;s_d.oil_pressure_valid=false;\n        s_d.vin[0]=0;memset(s_d.pid_valid,0,sizeof(s_d.pid_valid));s_d.seq++;\n        xSemaphoreGive(s_lock);\n        set_state("ADAPTER_READY"); elm_init(); detect_adapter();')
 t=t.replace('if(!ftdi_host_ready()) { set_state("USB_OFFLINE");', 'if(!ftdi_host_ready()) { xSemaphoreTake(s_lock,portMAX_DELAY);s_d.gear_valid=false;s_d.oil_pressure_valid=false;xSemaphoreGive(s_lock); set_state("USB_OFFLINE");')
 t=t.replace('if((gear_poll++ % 4U)==0U) query_gear();','if((gear_poll++ % 4U)==0U) query_gear();\n            if(gear_transport_dirty) break;')
+t=t.replace('void obd_auto_snapshot(obd_data_t *out){ if(!out||!s_lock)return;', 'void obd_auto_snapshot(obd_data_t *out){ if(!out)return; if(!s_lock){memset(out,0,sizeof(*out));snprintf(out->state,sizeof(out->state),"STARTING");return;}')
 obd_path.write_text(t)
