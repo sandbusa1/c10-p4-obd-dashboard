@@ -336,17 +336,42 @@ static int decode_22199a(const char *r)
     return 0;
 }
 
-static void query_gear(void)
+static bool gear_header(const char *command)
+{
+    char reply[128] = "";
+    return elm_cmd(command,reply,sizeof(reply),1200) && strstr(reply,"OK") != NULL;
+}
+
+static bool query_gear(void)
 {
     char r[512] = "";
-    bool replied = elm_cmd("22199A",r,sizeof(r),900);
+    bool vpw = s_active_protocol == 2;
+    bool addressed = !vpw || gear_header("ATSH6C10F1");
+    /* P01/0411 VPW requires the trailing 01 byte (verified on this PCM). */
+    const char *request = vpw ? "22199A01" : "22199A";
+    bool replied = addressed && elm_cmd(request,r,sizeof(r),900);
+    /* Restore functional OBD addressing even after a timeout or header error. */
+    bool restored = !vpw || gear_header("ATSH686AF1");
     int g = replied ? decode_22199a(r) : 0;
     xSemaphoreTake(s_lock,portMAX_DELAY);
     s_d.gear_valid = (g >= 1 && g <= 4);
     s_d.gear = g;
     s_d.seq++;
     xSemaphoreGive(s_lock);
-    ESP_LOGI(TAG,"GEAR_COMMANDED_ONLY 22199A raw=%.120s decoded=%d",r,g);
+    for (char *c=r; *c; ++c) if (*c=='\r' || *c=='\n' || *c=='>') *c=' ';
+    ESP_LOGI(TAG,"GEAR_VPW_ADDRESS request=%s header=%s set=%d reply=%d restore=%d raw=%.120s decoded=%d",
+             request,vpw?"6C10F1":"default",addressed,replied,restored,r,g);
+    /* Preserve useful replies on the SD card for review after a drive. */
+    static int last_gear = -1;
+    static int64_t last_log_us;
+    int64_t now = esp_timer_get_time();
+    if (g != last_gear || now-last_log_us >= 5000000) {
+        sd_logger_event("GEAR", "header=%s set=%d reply=%d restore=%d raw=%.120s decoded=%d",
+                        request,vpw?"6C10F1":"default",addressed,replied,restored,r,g);
+        last_gear=g; last_log_us=now;
+    }
+    /* Stop polling and reconnect if we cannot restore normal addressing. */
+    return restored;
 }
 
 ''' + obd[b:]
@@ -356,12 +381,89 @@ for old in ('        uint32_t range_poll = 0;\n',
     obd = obd.replace(old, '', 1)
 obd = obd.replace('Range is slow because the lever rarely moves.',
                   'Display assumes Drive; only commanded gear is requested.')
+# Track the active connection rather than treating a cached protocol as live.
+obd = obd.replace('static bool apply_functional_header(', 'static uint8_t s_active_protocol;\n\nstatic bool apply_functional_header(', 1)
+obd = obd.replace('if (proto == 2 && is_vx) h = "ATSH6C10F1";', 'if (proto == 2) h = "ATSH686AF1";')
+obd = obd.replace('    char r[128] = "";\n    const char *h = NULL;', '    (void)is_vx;\n    char r[128] = "";\n    const char *h = NULL;', 1)
+obd = obd.replace('    char name[24];', '    s_active_protocol = s_cached_proto;\n    char name[24];', 1)
+obd = obd.replace('    s_uds_only = false;', '    s_uds_only = false;\n    s_active_protocol = 0;', 1)
+obd = obd.replace('            if (pn) save_vehicle_profile(pn, NULL);', '            s_active_protocol = pn;\n            if (pn) save_vehicle_profile(pn, NULL);', 1)
+obd = obd.replace('            save_vehicle_profile(pn, NULL);', '            s_active_protocol = pn;\n            save_vehicle_profile(pn, NULL);', 1)
+obd = obd.replace('{"ATSP2", "J1850 VPW", "ATSH6C10F1"}', '{"ATSP2", "J1850 VPW", "ATSH686AF1"}')
+obd = obd.replace('6C 10 F1 = functional PCM request.', '68 6A F1 = functional OBD request; gear reads use 6C 10 F1.')
+old = 'if((gear_poll++ % 4U)==0U) query_gear();'
+if obd.count(old) != 1: raise SystemExit('Gear polling source changed')
+obd = obd.replace(old, 'if((gear_poll++ % 4U)==0U && !query_gear()) break;')
 obd_path.write_text(obd)
 p.write_text(p.read_text().replace('DRIVER_REFERENCE_V3 ROTATION=',
-                                  'DRIVER_REFERENCE_V3 GEAR_COMMANDED_ONLY ROTATION='))
+                                  'DRIVER_REFERENCE_V3 GEAR_COMMANDED_ONLY GEAR_VPW_ADDRESS ROTATION='))
 print('Verified gear: GEAR_COMMANDED_ONLY | assumed Drive | no range/speed gate')
+# Splash and startup motion run independently of incoming OBD samples.
+s = p.read_text()
+s = s.replace('static int64_t s_ui_boot_us;', 'static bool s_sweep_active;')
+s = s.replace('    s_ui_boot_us = esp_timer_get_time();\n', '')
+a = s.index('    int64_t age_ms=')
+b = s.index('    if(d->gear_valid', a)
+s = s[:a] + '''    if (!s_sweep_active) {
+        snprintf(b,sizeof(b),"%.0f",mph); text_if(drv_mph,b);
+        snprintf(b,sizeof(b),"%d",(int)rpm); text_if(drv_rpm,b);
+        driver_gauge_position(mph,rpm);
+    }
+    snprintf(b,sizeof(b),"%.0f",d->ect_f); text_if(drv_cool,b);
+    snprintf(b,sizeof(b),"%.1f",d->volts); text_if(drv_volts,b);
+''' + s[b:]
+a = s.index('static void splash_done_cb(')
+b = s.index('static void build_splash(void)', a)
+s = s[:a] + '''/* LVGL adapter owns animation callbacks and its display lock. */
+static void startup_sweep_step(void *unused, int32_t value)
+{
+    (void)unused;
+    char text[24];
+    float fraction = value / 1000.0f;
+    driver_gauge_position(160.0f*fraction, 7000.0f*fraction);
+    snprintf(text,sizeof(text),"%.0f",160.0f*fraction); text_if(drv_mph,text);
+    snprintf(text,sizeof(text),"%d",(int)(7000.0f*fraction)); text_if(drv_rpm,text);
+}
+static void startup_sweep_done(lv_anim_t *animation)
+{
+    (void)animation;
+    s_sweep_active = false;
+}
+static void start_startup_sweep(void)
+{
+    if (!s_startup_sweep) return;
+    s_sweep_active = true;
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, drv_speed_needle);
+    lv_anim_set_exec_cb(&animation, startup_sweep_step);
+    lv_anim_set_values(&animation, 0, 1000);
+    lv_anim_set_duration(&animation, 2000);
+    lv_anim_set_reverse_duration(&animation, 2000);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_in_out);
+    lv_anim_set_completed_cb(&animation, startup_sweep_done);
+    lv_anim_start(&animation);
+}
+''' + s[b:]
+anchor = 'lv_obj_set_pos(im,0,0);'
+if s.count(anchor) != 1: raise SystemExit('Splash image anchor changed')
+s = s.replace(anchor, anchor + '''
+    /* Fully filled cyan bar over the partial bar in the source artwork. */
+    lv_obj_t *bar = lv_obj_create(splash_screen);
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_pos(bar,310,548); lv_obj_set_size(bar,403,12);
+    lv_obj_set_style_radius(bar,5,0);
+    lv_obj_set_style_bg_color(bar,lv_color_hex(0x12BFFF),0);
+    lv_obj_set_style_bg_opa(bar,LV_OPA_COVER,0);
+    lv_obj_clear_flag(bar,LV_OBJ_FLAG_CLICKABLE);
+''', 1)
+s = s.replace('splash_loaded_us < 3000000', 'splash_loaded_us < 4000000')
+s = s.replace('at least three seconds', 'at least four seconds')
+s = s.replace('    lv_screen_load(pages[0]);\n', '    lv_screen_load(pages[0]);\n    start_startup_sweep();\n', 1)
+s = s.replace('SPLASH=3S', 'SPLASH=4S SWEEP=4S')
+p.write_text(s)
 written = p.read_text()
-for marker in ('driver_background_rgb565_start', 'ESP_LV_ADAPTER_ROTATE_180', 'splash_loaded_us < 3000000'):
+for marker in ('driver_background_rgb565_start', 'ESP_LV_ADAPTER_ROTATE_180', 'splash_loaded_us < 4000000'):
     if marker not in written: raise SystemExit(f'Prepared source missing {marker}: {p.resolve()}')
-print(f'Verified source: {p.resolve()} | DRIVER_REFERENCE_V3 | ROTATION=180 | SPLASH=3S')
+print(f'Verified source: {p.resolve()} | DRIVER_REFERENCE_V3 | ROTATION=180 | SPLASH=4S | SWEEP=4S')
 print('Prepared firmware: PSRAM-backed LVGL allocator + safe live updates + yielding async startup.')
