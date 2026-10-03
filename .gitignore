@@ -1,0 +1,5 @@
+firmware/
+firmware_previous_*/
+tests/host-build/
+previews/*.ppm
+__pycache__/
