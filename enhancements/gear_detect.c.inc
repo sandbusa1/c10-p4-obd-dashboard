@@ -1,5 +1,5 @@
 /* OEM gear reads are gated by the freshly read VIN, never the cached VIN.
- * GM 22199A retains the user's verified commanded-gear behavior.
+ * GM VPW uses the vehicle-verified 22199A01 at physical header 6C10F1.
  * Ford 221E12 is a documented one-byte gear reading; neither PID is universal.
  * Do not substitute recommended gear (0165) or guess from speed/RPM ratios.
  */
@@ -41,7 +41,7 @@ static int query_bmw_gear(void)
      * Definitions: OBDb/BMW-3-Series D031 @ 6F1/663/eax63,
      * oil pressure 586F @ 6F1/612/eax12. Unsupported modules return invalid.
      */
-    if(s_cached_proto!=6)return 0;
+    if(s_active_protocol!=6)return 0;
     char r[256]="";int g=0;bool oil_valid=false;float oil=0;
     bool configured=gear_at("ATSH6F1")&&gear_at("ATTAF1")&&gear_at("ATCEA63")&&gear_at("ATCRA663");
     if(configured&&elm_cmd("22D031",r,sizeof(r),900))g=decode_oem_gear(r,0xD031);
@@ -72,12 +72,22 @@ static void query_gear(void)
     else {
         uint16_t pid=gear_vehicle_profile==OBD_OEM_GM?0x199A:gear_vehicle_profile==OBD_OEM_FORD?0x1E12:0;
         if(!pid)return;
-        char cmd[12],r[512]="";snprintf(cmd,sizeof(cmd),"22%04X",pid);
-        bool replied=elm_cmd(cmd,r,sizeof(r),900);
-        g=replied?decode_oem_gear(r,pid):0;
+        bool vpw=gear_vehicle_profile==OBD_OEM_GM && s_active_protocol==2;
+        char cmd[12],r[512]="";
+        snprintf(cmd,sizeof(cmd),vpw?"22%04X01":"22%04X",pid);
+        bool configured=!vpw || gear_at("ATSH6C10F1");
+        bool replied=configured && elm_cmd(cmd,r,sizeof(r),900);
+        bool restored=!vpw || gear_at("ATSH686AF1");
+        g=replied&&restored?decode_oem_gear(r,pid):0;
+        if(!restored)gear_transport_dirty=true;
+        if(vpw) {
+            for(char *c=r;*c;c++)if(*c=='\r'||*c=='\n'||*c=='>')*c=' ';
+            ESP_LOGI(TAG,"GEAR_VPW_ADDRESS %s raw=%.120s decoded=%d",cmd,r,g);
+        }
     }
     xSemaphoreTake(s_lock,portMAX_DELAY);s_d.gear=g;s_d.gear_valid=g>0;s_d.seq++;xSemaphoreGive(s_lock);
     /* Back off unsupported OEM reads so they cannot dominate normal polling. */
     if(g>0){gear_failures=0;gear_retry_us=gear_vehicle_profile==OBD_OEM_BMW?now+1000000:0;}
     else if(++gear_failures>=3)gear_retry_us=now+10000000;
 }
+

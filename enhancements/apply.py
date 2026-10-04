@@ -99,4 +99,84 @@ t=t.replace('        set_state("ADAPTER_READY"); elm_init(); detect_adapter();',
 t=t.replace('if(!ftdi_host_ready()) { set_state("USB_OFFLINE");', 'if(!ftdi_host_ready()) { xSemaphoreTake(s_lock,portMAX_DELAY);s_d.gear_valid=false;s_d.oil_pressure_valid=false;xSemaphoreGive(s_lock); set_state("USB_OFFLINE");')
 t=t.replace('if((gear_poll++ % 4U)==0U) query_gear();','if((gear_poll++ % 4U)==0U) query_gear();\n            if(gear_transport_dirty) break;')
 t=t.replace('void obd_auto_snapshot(obd_data_t *out){ if(!out||!s_lock)return;', 'void obd_auto_snapshot(obd_data_t *out){ if(!out)return; if(!s_lock){memset(out,0,sizeof(*out));snprintf(out->state,sizeof(out->state),"STARTING");return;}')
+# Track the active connection rather than treating a cached protocol as live.
+t = t.replace('static bool apply_functional_header(', 'static uint8_t s_active_protocol;\n\nstatic bool apply_functional_header(', 1)
+t = t.replace('if (proto == 2 && is_vx) h = "ATSH6C10F1";', 'if (proto == 2) h = "ATSH686AF1";')
+t = t.replace('    char r[128] = "";\n    const char *h = NULL;', '    (void)is_vx;\n    char r[128] = "";\n    const char *h = NULL;', 1)
+t = t.replace('    char name[24];', '    s_active_protocol = s_cached_proto;\n    char name[24];', 1)
+t = t.replace('    s_uds_only = false;', '    s_uds_only = false;\n    s_active_protocol = 0;', 1)
+t = t.replace('            if (pn) save_vehicle_profile(pn, NULL);', '            s_active_protocol = pn;\n            if (pn) save_vehicle_profile(pn, NULL);', 1)
+t = t.replace('            save_vehicle_profile(pn, NULL);', '            s_active_protocol = pn;\n            save_vehicle_profile(pn, NULL);', 1)
+t = t.replace('{"ATSP2", "J1850 VPW", "ATSH6C10F1"}', '{"ATSP2", "J1850 VPW", "ATSH686AF1"}')
+t = t.replace('6C 10 F1 = functional PCM request.', '68 6A F1 = functional OBD request; gear reads use 6C 10 F1.')
+
 obd_path.write_text(t)
+
+
+s=p.read_text()
+s=s.replace('static int64_t s_ui_boot_us;', 'static bool s_sweep_active;')
+s=s.replace('    s_ui_boot_us = esp_timer_get_time();\n', '')
+a=s.index('    int64_t age_ms=')
+b=s.index('    if(live&&ui_pid_valid(d,0x05))',a)
+s=s[:a]+'''    if (!s_sweep_active) {
+        if(live&&ui_pid_valid(d,0x0D)) snprintf(b,sizeof(b),"%.0f",mph); else snprintf(b,sizeof(b),"---");
+        text_if(drv_mph,b);
+        if(live&&ui_pid_valid(d,0x0C)) snprintf(b,sizeof(b),"%d",(int)rpm); else snprintf(b,sizeof(b),"---");
+        text_if(drv_rpm,b);
+        driver_gauge_position(mph,rpm);
+    }
+'''+s[b:]
+s=s.replace('    driver_gauge_position(mph,rpm);\n    if(live', '    if(live')
+s=s.replace('"3 SEC"','"4 SEC"')
+a = s.index('static void splash_done_cb(')
+b = s.index('static void build_splash(void)', a)
+s = s[:a] + '''/* LVGL adapter owns animation callbacks and its display lock. */
+static void startup_sweep_step(void *unused, int32_t value)
+{
+    (void)unused;
+    char text[24];
+    float fraction = value / 1000.0f;
+    driver_gauge_position(160.0f*fraction, 7000.0f*fraction);
+    snprintf(text,sizeof(text),"%.0f",160.0f*fraction); text_if(drv_mph,text);
+    snprintf(text,sizeof(text),"%d",(int)(7000.0f*fraction)); text_if(drv_rpm,text);
+}
+static void startup_sweep_done(lv_anim_t *animation)
+{
+    (void)animation;
+    s_sweep_active = false;
+}
+static void start_startup_sweep(void)
+{
+    if (!s_startup_sweep) return;
+    s_sweep_active = true;
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, drv_speed_needle);
+    lv_anim_set_exec_cb(&animation, startup_sweep_step);
+    lv_anim_set_values(&animation, 0, 1000);
+    lv_anim_set_duration(&animation, 2000);
+    lv_anim_set_reverse_duration(&animation, 2000);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_in_out);
+    lv_anim_set_completed_cb(&animation, startup_sweep_done);
+    lv_anim_start(&animation);
+}
+''' + s[b:]
+anchor = 'lv_obj_set_pos(im,0,0);'
+if s.count(anchor) != 1: raise SystemExit('Splash image anchor changed')
+s = s.replace(anchor, anchor + '''
+    /* Fully filled cyan bar over the partial bar in the source artwork. */
+    lv_obj_t *bar = lv_obj_create(splash_screen);
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_pos(bar,310,548); lv_obj_set_size(bar,403,12);
+    lv_obj_set_style_radius(bar,5,0);
+    lv_obj_set_style_bg_color(bar,lv_color_hex(0x12BFFF),0);
+    lv_obj_set_style_bg_opa(bar,LV_OPA_COVER,0);
+    lv_obj_clear_flag(bar,LV_OBJ_FLAG_CLICKABLE);
+''', 1)
+s = s.replace('splash_loaded_us < 3000000', 'splash_loaded_us < 4000000')
+s = s.replace('at least three seconds', 'at least four seconds')
+s = s.replace('    lv_screen_load(pages[0]);\n', '    lv_screen_load(pages[0]);\n    start_startup_sweep();\n', 1)
+s = s.replace('SPLASH=3S', 'SPLASH=4S SWEEP=4S GEAR_VPW_ADDRESS')
+
+p.write_text(s)
+print("Verified final: DRIVER_REFERENCE_V4 GEAR_VPW_ADDRESS SPLASH=4S SWEEP=4S PCM_LOGGING")

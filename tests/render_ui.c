@@ -43,10 +43,11 @@ int main(void)
     pcm_open_cb(NULL);assert(page_now==4);pcm_bank=4;pcm_refresh_view();
     save(pcm_page,"previews/logging-last.ppm");
     pcm_close_cb(NULL);assert(page_now==2);
-    s_startup_sweep=true;s_ui_boot_us=host_time;
-    for(int i=0;i<=40;i++){
-        host_time=s_ui_boot_us+i*40000;update_ui(&sample_data);
+    s_startup_sweep=true;start_startup_sweep();
+    for(int i=0;i<=100;i++){
+        host_time+=40000;lv_tick_inc(40);lv_timer_handler();update_ui(&sample_data);
         char path[80];snprintf(path,sizeof(path),"previews/sweep-%02d.ppm",i);save(pages[0],path);
     }
     puts("UI render and open/close navigation checks passed");return 0;
 }
+
