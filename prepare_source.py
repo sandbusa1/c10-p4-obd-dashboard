@@ -365,3 +365,5 @@ for marker in ('driver_background_rgb565_start', 'ESP_LV_ADAPTER_ROTATE_180', 's
     if marker not in written: raise SystemExit(f'Prepared source missing {marker}: {p.resolve()}')
 print(f'Verified source: {p.resolve()} | DRIVER_REFERENCE_V3 | ROTATION=180 | SPLASH=3S')
 print('Prepared firmware: PSRAM-backed LVGL allocator + safe live updates + yielding async startup.')
+
+runpy.run_path(str(Path(__file__).resolve().parent / "enhancements" / "apply.py"))
