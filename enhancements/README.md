@@ -24,7 +24,7 @@ BMW explicit flow control uses 6F1 and the module extended-address prefix, then 
 
 ## Logging
 
-Page 3 → PCM LOGGING opens the separate selector. All 59 decoded channels can be selected across five banks, including RPM, speed, commanded gear, selector position and oil pressure. Adapter voltage is identified separately from PCM module voltage. This is every channel decoded by this firmware, not every proprietary variable inside every PCM.
+Page 3 → PCM LOGGING opens the separate selector. The list shows only readings actually available from the connected vehicle. ALL selects those readings only; START intersects saved selections with current availability before writing the CSV header. No-data channels and offline vehicles show no selectable readings. The registry supports 67 channels, with compact banks of up to 12 available channels. Existing selections migrate to a two-word mask so channels above index 63 work correctly. Adapter voltage is identified separately from PCM module voltage. This is every channel decoded by this firmware, not every proprietary variable inside every PCM.
 
 START creates `/sdcard/pcm_000001.csv` (then the next unused number). No previous CSV is overwritten. Selection is locked during a session and remembered at the next START. STOP or SAVE LOG flushes, synchronizes and closes the CSV, preserving it. CLOSE returns to Page 3 without stopping an active session. The original `/sdcard/obd2.log` event/snapshot logger remains in place.
 
@@ -50,3 +50,11 @@ GM protocol-6 polls take a bounded 120 ms filtered ATMA listening window for 1F5
 - Ford TCM addressing: https://torque-bhp.com/community/main-forum/ford-6-7-diesel-pids/paged/17/
 
 Brand detection selects candidate definitions; it does not mean all models or years support those definitions. Existing automatic protocol discovery and current-VIN selection remain enabled. BMW/Ford support requires target-car testing, and this build does not claim universal oil-pressure coverage.
+
+## V6 E38 data additions
+
+Eight additional channels use the documented E38 LS3/L99 + 6L80 broadcast definitions above: transmission temperature (4C9), input shaft RPM (19D), output shaft RPM (0F9), calculated converter slip (0C9 engine RPM minus 19D input RPM), pedal and brake (0C9), commanded lambda and estimated fuel mass flow in g/s (1ED). These are candidate definitions pending vehicle testing, not evidence of live support until a valid frame arrives. No speculative knock/misfire PIDs or undocumented fuel-volume conversion are included.
+
+Gear is captured first. One additional exact-ID filtered window rotates through the new frames each gear poll. The input-speed window is preceded by a fresh engine-RPM capture; calculated slip requires capture timestamps within 500 ms. It is an estimate, not a simultaneously sampled TCC measurement. Each monitor window is bounded to 120 ms. Formatting and filters are restored before normal OBD requests; an unterminated stream triggers reconnect. Invalid sentinel values are rejected and CAN fields expire after 30 seconds without a valid observation. Disconnect/reconnect clears them. PID refresh failures now invalidate the corresponding logging channel.
+
+CSV columns remain fixed during recording, with unavailable cells blank. A newly available channel can be selected for the next log. Startup auto-detection, splash, sweep, and OEM gear/pressure paths remain enabled.

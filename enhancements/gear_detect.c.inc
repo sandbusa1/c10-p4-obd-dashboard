@@ -75,6 +75,7 @@ static bool decode_gm_frame(const char *text, int *range, int *gear)
     }
     return found;
 }
+#include "e38_data.c.inc"
 static bool query_gm_can(int *gear)
 {
     char raw[1024]="";int range=0;*gear=0;
@@ -86,6 +87,8 @@ static bool query_gm_can(int *gear)
         gear_transport_dirty=true;
         return false;
     }
+    if(configured)e38_capture_next();
+    if(gear_transport_dirty)return false;
     bool restored=restore_can();
     bool valid=restored&&configured&&decode_gm_frame(raw,&range,gear);
     xSemaphoreTake(s_lock,portMAX_DELAY);
