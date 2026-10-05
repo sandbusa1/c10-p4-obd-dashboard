@@ -33,6 +33,23 @@ static bool elm_cmd(const char *cmd,char *r,size_t n,unsigned t){
 static void vehicle(const char *vin,int protocol){memset(&s_d,0,sizeof(s_d));snprintf(s_d.vin,sizeof(s_d.vin),"%s",vin);s_active_protocol=protocol;calls[0]=0;failed_command="";monitor_ok=true;host_time+=20000000;detect_gear_profile();}
 int main(void)
 {
+    uint8_t frame[8];
+    assert(e38_last_frame("04C9 00 64 00 00 00 00 00 00\r4C9 00 64 00 00 00 00 00 00\r",0x4C9,frame));
+    e38_decode(&s_d,0x4C9,frame,host_time);
+    assert(s_d.e38_value[E38_TRANS_TEMP]==140.0f);
+    assert(!e38_last_frame("4C9 00 64\r",0x4C9,frame));
+    assert(e38_last_frame("0C9 00 1F 40 00 7F 01 00 00\r",0x0C9,frame));
+    e38_decode(&s_d,0x0C9,frame,host_time);
+    assert(s_d.e38_engine_rpm==2000 && s_d.e38_value[E38_PEDAL]==50 && s_d.e38_value[E38_BRAKE]==1);
+    uint8_t input[8]={0,0,0,0,0,0x1C,0x20,0};
+    e38_decode(&s_d,0x19D,input,host_time+200000);
+    assert(s_d.e38_value[E38_INPUT_RPM]==1800 && s_d.e38_value[E38_SLIP]==200 && s_d.e38_seen_us[E38_SLIP]);
+    e38_decode(&s_d,0x19D,input,host_time+600000);assert(!s_d.e38_seen_us[E38_SLIP]);
+    uint8_t fuel[8]={0,0,0x04,0xD2,0,0,117,0};
+    e38_decode(&s_d,0x1ED,fuel,host_time);
+    assert(s_d.e38_value[E38_LAMBDA]==1 && s_d.e38_value[E38_FUEL_MASS]>1.233f && s_d.e38_value[E38_FUEL_MASS]<1.235f);
+    memset(fuel,255,8);e38_decode(&s_d,0x1ED,fuel,host_time);
+    assert(!s_d.e38_seen_us[E38_LAMBDA]&&!s_d.e38_seen_us[E38_FUEL_MASS]);
     int range=0,g=0;
     assert(decode_gm_frame("1F5 0F 0F 00 01 00 00 03 00\r",&range,&g)&&range==1&&g==0);
     assert(decode_gm_frame("1F5 0E 0D 00 02 00 00 03 00\r",&range,&g)&&range==2&&g==0);

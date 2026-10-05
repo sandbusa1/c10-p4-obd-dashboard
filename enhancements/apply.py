@@ -214,3 +214,5 @@ v=v.replace('    case M_RPM: snprintf', '    case M_SELECTOR: snprintf(b,n,"%s",
 c.write_text(v)
 p.write_text(p.read_text().replace('metric_priority[M_COUNT-2]','metric_priority[M_COUNT-3]').replace('i < M_COUNT-2; ++i','i < M_COUNT-3; ++i'))
 print('Verified V5: startup auto-detect retained; E38 CAN selector/commanded gear + oil; addressed Ford and BMW reads')
+
+exec(compile((root/'enhancements/apply_e38_data.py').read_text(),str(root/'enhancements/apply_e38_data.py'),'exec'),{'__file__':str(root/'enhancements/apply_e38_data.py')})
