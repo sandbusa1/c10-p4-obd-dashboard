@@ -48,6 +48,14 @@ int main(void)
         host_time+=40000;lv_tick_inc(40);lv_timer_handler();update_ui(&sample_data);
         char path[80];snprintf(path,sizeof(path),"previews/sweep-%02d.ppm",i);save(pages[0],path);
     }
+    sample_data.shifter_range_valid=true;sample_data.shifter_range=1;update_ui(&sample_data);
+    assert(!strcmp(lv_label_get_text(drv_gear),"P"));
+    assert(lv_obj_get_style_text_font(drv_gear,0)==&lv_font_montserrat_48);
+    save(pages[0],"previews/driver-park.ppm");
+    sample_data.shifter_range=4;sample_data.gear_valid=false;update_ui(&sample_data);
+    assert(!strcmp(lv_label_get_text(drv_gear),"D"));
+    sample_data.gear=6;sample_data.gear_valid=true;update_ui(&sample_data);
+    assert(!strcmp(lv_label_get_text(drv_gear),"6"));
     puts("UI render and open/close navigation checks passed");return 0;
 }
 

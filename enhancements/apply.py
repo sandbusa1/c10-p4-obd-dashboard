@@ -180,3 +180,37 @@ s = s.replace('SPLASH=3S', 'SPLASH=4S SWEEP=4S GEAR_VPW_ADDRESS')
 
 p.write_text(s)
 print("Verified final: DRIVER_REFERENCE_V4 GEAR_VPW_ADDRESS SPLASH=4S SWEEP=4S PCM_LOGGING")
+
+# V5 E38 CAN capture, OEM addressing, and selector display.
+t=obd_path.read_text()
+t=t.replace('static const char *oem_name(', (root/'enhancements/can_monitor.c.inc').read_text()+'\nstatic const char *oem_name(',1)
+# Invalidate readings whenever the transport leaves LIVE, including reconnects.
+t=t.replace('    snprintf(s_d.state,sizeof(s_d.state),"%s",st);', '    if(strcmp(st,"LIVE")){s_d.gear_valid=false;s_d.shifter_range_valid=false;s_d.oil_pressure_valid=false;}\n    snprintf(s_d.state,sizeof(s_d.state),"%s",st);')
+obd_path.write_text(t)
+s=p.read_text()
+old='''    if(live&&d->gear_valid && d->gear>0) snprintf(b,sizeof(b),"%d",d->gear);
+    else snprintf(b,sizeof(b),"-");
+    text_if(drv_gear,b);'''
+new='''    bool selector=live&&d->shifter_range_valid;
+    if(selector && d->shifter_range==1) snprintf(b,sizeof(b),"P");
+    else if(selector && d->shifter_range==2) snprintf(b,sizeof(b),"R");
+    else if(selector && d->shifter_range==3) snprintf(b,sizeof(b),"N");
+    else if(live&&d->gear_valid && d->gear>0) snprintf(b,sizeof(b),"%d",d->gear);
+    else if(selector && d->shifter_range>=4) snprintf(b,sizeof(b),"D");
+    else snprintf(b,sizeof(b),"-");
+    /* Numeric-only custom font has no P/R/N/D glyphs. */
+    const lv_font_t *gear_font=(b[0]>='A'&&b[0]<='Z')?&lv_font_montserrat_48:&driver_digits_48;
+    if(lv_obj_get_style_text_font(drv_gear,0)!=gear_font)lv_obj_set_style_text_font(drv_gear,gear_font,0);
+    text_if(drv_gear,b);'''
+if s.count(old)!=1: raise SystemExit('V5 gear display anchor changed')
+s=s.replace(old,new).replace('DRIVER_REFERENCE_V4','DRIVER_REFERENCE_V5 E38_CAN_1F5 OIL_1470')
+p.write_text(s)
+# Selector is a separate selectable log channel; gear remains numeric command.
+h=main/'live_metrics.h';v=h.read_text().replace('M_SPEED, M_COUNT','M_SPEED, M_SELECTOR, M_COUNT');h.write_text(v)
+c=main/'live_metrics.c';v=c.read_text().replace('bool metric_available(', 'bool metric_available(')
+v=v.replace('case M_RPM: return', 'case M_SELECTOR: return d->shifter_range_valid; case M_RPM: return',1)
+v=v.replace('"RPM","SPEED mph"','"RPM","SPEED mph","SELECTOR"')
+v=v.replace('    case M_RPM: snprintf', '    case M_SELECTOR: snprintf(b,n,"%s",d->shifter_range==1?"P":d->shifter_range==2?"R":d->shifter_range==3?"N":d->shifter_range>=4?"D":"-"); break;\n    case M_RPM: snprintf',1)
+c.write_text(v)
+p.write_text(p.read_text().replace('metric_priority[M_COUNT-2]','metric_priority[M_COUNT-3]').replace('i < M_COUNT-2; ++i','i < M_COUNT-3; ++i'))
+print('Verified V5: startup auto-detect retained; E38 CAN selector/commanded gear + oil; addressed Ford and BMW reads')
